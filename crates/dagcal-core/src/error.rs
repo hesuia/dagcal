@@ -4,7 +4,7 @@ use thiserror::Error;
 pub enum DagcalError {
     #[error("parse error: {0}")]
     Parse(String),
-    
+
     #[error(transparent)]
     Eval(#[from] EvalError),
 }
@@ -13,7 +13,7 @@ pub enum DagcalError {
 pub enum EvalError {
     #[error("unknown reference `{0}`")]
     UnknownReference(String),
-    
+
     #[error("unknown function `{0}`")]
     UnknownFunction(String),
 

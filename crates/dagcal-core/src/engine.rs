@@ -122,6 +122,10 @@ impl Engine {
         self.entries.get(id)
     }
 
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &Entry)> {
+        self.entries.iter().map(|(id, entry)| (id.as_str(), entry))
+    }
+
     pub fn eval_once(&self, source: &str) -> Result<f64, DagcalError> {
         let ast = parse_expression(source)?;
         let mut resolve = |name: &str| self.resolve_reference(name);
@@ -429,5 +433,27 @@ mod tests {
 
         assert_eq!(id, "$2");
         assert_eq!(state, EntryState::Value(101.0));
+    }
+
+    #[test]
+    fn exposes_entries_for_read_only_listing() {
+        let mut engine = Engine::new();
+
+        engine.set_expr("subtotal", "100").unwrap();
+        engine.append_expr("subtotal * 1.1");
+
+        let mut entries = engine
+            .entries()
+            .map(|(id, entry)| (id.to_string(), entry.source.clone(), entry.state.clone()))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0, "$1");
+        assert_eq!(entries[0].1, "subtotal * 1.1");
+        assert_eq!(entries[0].2, EntryState::Value(110.00000000000001));
+        assert_eq!(entries[1].0, "subtotal");
+        assert_eq!(entries[1].1, "100");
+        assert_eq!(entries[1].2, EntryState::Value(100.0));
     }
 }

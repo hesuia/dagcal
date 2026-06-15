@@ -39,6 +39,9 @@ dependencies = [
 [[package]]
 name = "dagcal"
 version = "0.1.0"
+dependencies = [
+ "dagcal-core",
+]
 
 [[package]]
 name = "dagcal-core"
