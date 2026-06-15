@@ -1,0 +1,16 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+
+calculation = { SOI ~ expr ~ EOI }
+expr = { add }
+add = { mul ~ (add_op ~ mul)* }
+add_op = { "+" | "-" }
+mul = { unary ~ (mul_op ~ unary)* }
+mul_op = { "*" | "/" | "%" }
+unary = { unary_op* ~ pow }
+unary_op = { "+" | "-" }
+pow = { primary ~ ("^" ~ unary)? }
+primary = { function_call | number | result_ref | ident | "(" ~ expr ~ ")" }
+function_call = { ident ~ "(" ~ (expr ~ ("," ~ expr)*)? ~ ")" }
+result_ref = @{ "$" ~ ASCII_DIGIT+ }
+ident = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+number = @{ (ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT*)? | "." ~ ASCII_DIGIT+) ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
