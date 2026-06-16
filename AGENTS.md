@@ -27,6 +27,9 @@ Use standard Rust style: 4-space indentation, `snake_case` for functions/modules
 
 Formatting is enforced with `cargo fmt`. No separate linter is configured yet, so keep code idiomatic and warning-free under `cargo check`.
 
+- Avoid unnecessary clones and prefer references when possible. Use `Result<T, E>` for fallible operations and define custom error types in `error.rs` for clarity.
+- For public API functions, document behavior, parameters, and return values with doc comments. For internal functions, focus on clear naming and modularity to convey intent.
+
 ## Testing Guidelines
 
 Tests are currently inline unit tests within the relevant source files. Add tests next to the code they validate. Cover parser precedence, evaluation edge cases, dependency propagation, and recomputation after edits or removals.
