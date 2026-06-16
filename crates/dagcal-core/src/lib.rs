@@ -39,6 +39,17 @@ mod tests {
         assert_close(engine.eval_once("log(100)").unwrap(), 2.0);
         assert_close(engine.eval_once("ln(e)").unwrap(), 1.0);
         assert_close(engine.eval_once("exp(0)").unwrap(), 1.0);
+        assert_close(engine.eval_once("sqrt(9)").unwrap(), 3.0);
+        assert_close(engine.eval_once("abs(-3.5)").unwrap(), 3.5);
+        assert_close(engine.eval_once("floor(1.9)").unwrap(), 1.0);
+        assert_close(engine.eval_once("ceil(1.1)").unwrap(), 2.0);
+        assert_close(
+            engine.eval_once("atan2(1, 1)").unwrap(),
+            std::f64::consts::FRAC_PI_4,
+        );
+        assert_close(engine.eval_once("hypot(3, 4)").unwrap(), 5.0);
+        assert_close(engine.eval_once("pow(2, 3)").unwrap(), 8.0);
+        assert_close(engine.eval_once("logn(8, 2)").unwrap(), 3.0);
     }
 
     #[test]
