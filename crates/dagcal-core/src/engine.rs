@@ -1,11 +1,9 @@
 use crate::ast::Expr;
+use crate::dependency_graph::ReferenceGraph;
 use crate::error::{DagcalError, EvalError};
 use crate::eval::eval_expr;
 use crate::function::FunctionRegistry;
 use crate::parser::parse_expression;
-use petgraph::Direction;
-use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::visit::EdgeRef;
 use std::collections::{BTreeSet, HashMap};
 
 #[derive(Debug, Clone)]
@@ -55,8 +53,7 @@ pub struct Engine {
     entries: HashMap<String, Entry>,
     constants: HashMap<String, f64>,
     functions: FunctionRegistry,
-    dependency_graph: DiGraph<String, ()>,
-    node_indices: HashMap<String, NodeIndex>,
+    dependency_graph: ReferenceGraph,
     next_result_index: usize,
 }
 
@@ -75,8 +72,7 @@ impl Engine {
                 ("pi".to_string(), std::f64::consts::PI),
             ]),
             functions: FunctionRegistry::standard(),
-            dependency_graph: DiGraph::new(),
-            node_indices: HashMap::new(),
+            dependency_graph: ReferenceGraph::new(),
             next_result_index: 1,
         }
     }
@@ -146,43 +142,13 @@ impl Engine {
     }
 
     pub fn cycle_diagnostics(&self) -> CycleDiagnostics {
-        let mut diagnostics = CycleDiagnostics::default();
+        let report = self.dependency_graph.cycle_report();
 
-        for component in petgraph::algo::kosaraju_scc(&self.dependency_graph) {
-            let is_cycle = component.len() > 1
-                || component.iter().any(|&node| {
-                    self.dependency_graph
-                        .edges_directed(node, Direction::Outgoing)
-                        .any(|edge| edge.target() == node)
-                });
-
-            if !is_cycle {
-                continue;
-            }
-
-            let cycle = component
-                .iter()
-                .map(|&node| self.dependency_graph[node].clone())
-                .collect::<BTreeSet<_>>();
-            diagnostics.cycle_nodes.extend(cycle.iter().cloned());
-            diagnostics.cycles.push(cycle);
+        CycleDiagnostics {
+            cycles: report.cycles,
+            cycle_nodes: report.cycle_nodes,
+            dependent_nodes: report.dependent_nodes,
         }
-
-        diagnostics.cycles.sort();
-
-        let cycle_start_nodes = diagnostics
-            .cycle_nodes
-            .iter()
-            .filter_map(|id| self.node_indices.get(id).copied())
-            .collect::<Vec<_>>();
-
-        diagnostics.dependent_nodes = self
-            .collect_dependents(cycle_start_nodes)
-            .difference(&diagnostics.cycle_nodes)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-
-        diagnostics
     }
 
     pub fn eval_once(&self, source: &str) -> Result<f64, DagcalError> {
@@ -192,13 +158,8 @@ impl Engine {
     }
 
     fn recompute_all(&mut self) {
-        let ids = self.entries.keys().cloned().collect::<Vec<_>>();
-        for id in ids {
-            let state = self.evaluate_entry(&id, &mut Vec::new());
-            if let Some(entry) = self.entries.get_mut(&id) {
-                entry.state = state;
-            }
-        }
+        let ids = self.entries.keys().cloned().collect::<BTreeSet<_>>();
+        self.recompute_ids(ids);
     }
 
     fn allocate_result_id(&mut self) -> String {
@@ -217,52 +178,32 @@ impl Engine {
     }
 
     fn collect_affected(&self, id: &str) -> BTreeSet<String> {
-        let mut affected = BTreeSet::from([id.to_string()]);
-        let Some(&start) = self.node_indices.get(id) else {
-            return affected;
-        };
-
-        affected.extend(self.collect_dependents([start]));
-        affected
-    }
-
-    fn collect_dependents<I>(&self, starts: I) -> BTreeSet<String>
-    where
-        I: IntoIterator<Item = NodeIndex>,
-    {
-        let mut dependents = BTreeSet::new();
-        let mut stack = starts.into_iter().collect::<Vec<_>>();
-
-        while let Some(current) = stack.pop() {
-            for dependent in self
-                .dependency_graph
-                .neighbors_directed(current, Direction::Outgoing)
-            {
-                let dependent_id = self.dependency_graph[dependent].clone();
-                if dependents.insert(dependent_id) {
-                    stack.push(dependent);
-                }
-            }
-        }
-
-        dependents
+        self.dependency_graph.affected_by(id)
     }
 
     fn recompute_ids(&mut self, ids: BTreeSet<String>) {
-        for current in ids {
-            let state = self.evaluate_entry(&current, &mut Vec::new());
+        let cycle_nodes = self.dependency_graph.cycle_report().cycle_nodes;
+        for id in ids.intersection(&cycle_nodes) {
+            if let Some(entry) = self.entries.get_mut(id) {
+                entry.state =
+                    EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(id.clone())));
+            }
+        }
+
+        for current in self.dependency_graph.evaluation_order(ids) {
+            if cycle_nodes.contains(&current) {
+                continue;
+            }
+
+            let state = self.evaluate_entry(&current);
             if let Some(entry) = self.entries.get_mut(&current) {
                 entry.state = state;
             }
         }
     }
 
-    fn evaluate_entry(&self, id: &str, stack: &mut Vec<String>) -> EntryState {
+    fn evaluate_entry(&self, id: &str) -> EntryState {
         if self.cycle_diagnostics().cycle_nodes.contains(id) {
-            return EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(id.to_string())));
-        }
-
-        if stack.iter().any(|seen| seen == id) {
             return EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(id.to_string())));
         }
 
@@ -276,10 +217,8 @@ impl Engine {
             return entry.state.clone();
         };
 
-        stack.push(id.to_string());
-        let mut resolve = |name: &str| self.resolve_reference_with_stack(name, stack);
+        let mut resolve = |name: &str| self.resolve_reference(name);
         let result = eval_expr(ast, &self.functions, &mut resolve);
-        stack.pop();
 
         match result {
             Ok(value) => EntryState::Value(value),
@@ -288,17 +227,9 @@ impl Engine {
     }
 
     fn resolve_reference(&self, name: &str) -> Result<f64, EvalError> {
-        self.resolve_reference_with_stack(name, &mut Vec::new())
-    }
-
-    fn resolve_reference_with_stack(
-        &self,
-        name: &str,
-        stack: &mut Vec<String>,
-    ) -> Result<f64, EvalError> {
-        if self.entries.contains_key(name) {
-            match self.evaluate_entry(name, stack) {
-                EntryState::Value(value) => Ok(value),
+        if let Some(entry) = self.entries.get(name) {
+            match &entry.state {
+                EntryState::Value(value) => Ok(*value),
                 EntryState::Error(_) => Err(EvalError::DependencyError(name.to_string())),
             }
         } else if let Some(value) = self.constants.get(name) {
@@ -309,25 +240,11 @@ impl Engine {
     }
 
     fn rebuild_dependency_graph(&mut self) {
-        self.dependency_graph = DiGraph::new();
-        self.node_indices.clear();
-
-        for id in self.entries.keys() {
-            let node = self.dependency_graph.add_node(id.clone());
-            self.node_indices.insert(id.clone(), node);
-        }
-
-        for (id, entry) in &self.entries {
-            let Some(&dependent) = self.node_indices.get(id) else {
-                continue;
-            };
-
-            for reference in &entry.references {
-                if let Some(&dependency) = self.node_indices.get(reference) {
-                    self.dependency_graph.add_edge(dependency, dependent, ());
-                }
-            }
-        }
+        self.dependency_graph.rebuild(
+            self.entries
+                .iter()
+                .map(|(id, entry)| (id.as_str(), &entry.references)),
+        );
     }
 
     fn state_result(&self, id: &str) -> Result<(), DagcalError> {
@@ -645,6 +562,31 @@ mod tests {
         assert!(diagnostics.dependent_nodes.is_empty());
         assert_value(&engine, "b", 2.0);
         assert_value(&engine, "c", 2.0);
+    }
+
+    #[test]
+    fn recomputes_acyclic_entries_in_dependency_order_when_cycles_exist() {
+        let mut engine = Engine::new();
+
+        engine.set_expr("z", "1").unwrap();
+        engine.set_expr("a", "z + 1").unwrap();
+        assert!(engine.set_expr("cycle_left", "cycle_right + 1").is_err());
+        assert!(engine.set_expr("cycle_right", "cycle_left + 1").is_err());
+
+        engine.set_expr("z", "10").unwrap();
+
+        assert_value(&engine, "z", 10.0);
+        assert_value(&engine, "a", 11.0);
+        assert_eval_error(
+            &engine,
+            "cycle_left",
+            |err| matches!(err, EvalError::CycleDetected(name) if name == "cycle_left"),
+        );
+        assert_eval_error(
+            &engine,
+            "cycle_right",
+            |err| matches!(err, EvalError::CycleDetected(name) if name == "cycle_right"),
+        );
     }
 
     #[test]

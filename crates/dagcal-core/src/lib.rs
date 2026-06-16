@@ -1,4 +1,5 @@
 mod ast;
+mod dependency_graph;
 mod engine;
 mod error;
 mod eval;
