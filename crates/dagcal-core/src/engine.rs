@@ -355,6 +355,73 @@ mod tests {
     }
 
     #[test]
+    fn recomputes_branching_graph_through_errors_and_recovery() {
+        let mut engine = Engine::new();
+
+        engine.set_expr("price", "10").unwrap();
+        engine.set_expr("quantity", "3").unwrap();
+        engine.set_expr("discount", "2").unwrap();
+        engine.set_expr("gross", "price * quantity").unwrap();
+        engine.set_expr("net", "gross - discount").unwrap();
+        engine.set_expr("fee", "price / (quantity - 1)").unwrap();
+        engine
+            .set_expr("summary", "net + fee + sin(pi / 2)")
+            .unwrap();
+
+        assert_value(&engine, "gross", 30.0);
+        assert_value(&engine, "net", 28.0);
+        assert_value(&engine, "fee", 5.0);
+        assert_value(&engine, "summary", 34.0);
+
+        engine.set_expr("price", "20").unwrap();
+
+        assert_value(&engine, "gross", 60.0);
+        assert_value(&engine, "net", 58.0);
+        assert_value(&engine, "fee", 10.0);
+        assert_value(&engine, "summary", 69.0);
+
+        engine.remove_expr("discount");
+
+        assert_value(&engine, "gross", 60.0);
+        assert_value(&engine, "fee", 10.0);
+        assert_eval_error(
+            &engine,
+            "net",
+            |err| matches!(err, EvalError::UnknownReference(name) if name == "discount"),
+        );
+        assert_eval_error(
+            &engine,
+            "summary",
+            |err| matches!(err, EvalError::DependencyError(name) if name == "net"),
+        );
+
+        engine.set_expr("discount", "8").unwrap();
+
+        assert_value(&engine, "net", 52.0);
+        assert_value(&engine, "summary", 63.0);
+
+        engine.set_expr("quantity", "1").unwrap();
+
+        assert_value(&engine, "gross", 20.0);
+        assert_value(&engine, "net", 12.0);
+        assert_eval_error(&engine, "fee", |err| {
+            matches!(err, EvalError::DivisionByZero)
+        });
+        assert_eval_error(
+            &engine,
+            "summary",
+            |err| matches!(err, EvalError::DependencyError(name) if name == "fee"),
+        );
+
+        engine.set_expr("quantity", "4").unwrap();
+
+        assert_value(&engine, "gross", 80.0);
+        assert_value(&engine, "net", 72.0);
+        assert_value(&engine, "fee", 20.0 / 3.0);
+        assert_value(&engine, "summary", 72.0 + (20.0 / 3.0) + 1.0);
+    }
+
+    #[test]
     fn dependency_errors_propagate() {
         let mut engine = Engine::new();
 
@@ -422,6 +489,68 @@ mod tests {
         engine.set_expr("$1", "10").unwrap();
 
         assert_value(&engine, "$2", 13.0);
+    }
+
+    #[test]
+    fn numbered_results_recompute_branching_graph_through_removal_and_reuse() {
+        let mut engine = Engine::new();
+
+        let (first, _) = engine.append_expr("2");
+        let (second, _) = engine.append_expr("$1 + 3");
+        let (third, _) = engine.append_expr("$1 * $2");
+        let (fourth, _) = engine.append_expr("$2 + $3 + sin(pi / 2)");
+        let (fifth, _) = engine.append_expr("$4 / ($2 - 5)");
+
+        assert_eq!(first, "$1");
+        assert_eq!(second, "$2");
+        assert_eq!(third, "$3");
+        assert_eq!(fourth, "$4");
+        assert_eq!(fifth, "$5");
+        assert_value(&engine, "$2", 5.0);
+        assert_value(&engine, "$3", 10.0);
+        assert_value(&engine, "$4", 16.0);
+        assert_eval_error(&engine, "$5", |err| {
+            matches!(err, EvalError::DivisionByZero)
+        });
+
+        engine.set_expr("$1", "4").unwrap();
+
+        assert_value(&engine, "$2", 7.0);
+        assert_value(&engine, "$3", 28.0);
+        assert_value(&engine, "$4", 36.0);
+        assert_value(&engine, "$5", 18.0);
+
+        engine.remove_expr("$2");
+
+        assert_value(&engine, "$1", 4.0);
+        assert_eval_error(
+            &engine,
+            "$3",
+            |err| matches!(err, EvalError::UnknownReference(name) if name == "$2"),
+        );
+        assert_eval_error(
+            &engine,
+            "$4",
+            |err| matches!(err, EvalError::UnknownReference(name) if name == "$2"),
+        );
+        assert_eval_error(
+            &engine,
+            "$5",
+            |err| matches!(err, EvalError::DependencyError(name) if name == "$4"),
+        );
+
+        engine.set_expr("$2", "$1 + 6").unwrap();
+
+        assert_value(&engine, "$2", 10.0);
+        assert_value(&engine, "$3", 40.0);
+        assert_value(&engine, "$4", 51.0);
+        assert_value(&engine, "$5", 51.0 / 5.0);
+
+        let (sixth, sixth_state) = engine.append_expr("$5 + $3");
+
+        assert_eq!(sixth, "$6");
+        assert_eq!(sixth_state, EntryState::Value(50.2));
+        assert_value(&engine, "$6", 50.2);
     }
 
     #[test]
