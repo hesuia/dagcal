@@ -3,7 +3,10 @@ use crate::error::{DagcalError, EvalError};
 use crate::eval::eval_expr;
 use crate::function::FunctionRegistry;
 use crate::parser::parse_expression;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use petgraph::Direction;
+use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::EdgeRef;
+use std::collections::{BTreeSet, HashMap};
 
 #[derive(Debug, Clone)]
 pub struct Entry {
@@ -19,11 +22,19 @@ pub enum EntryState {
     Error(DagcalError),
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CycleDiagnostics {
+    pub cycles: Vec<BTreeSet<String>>,
+    pub cycle_nodes: BTreeSet<String>,
+    pub dependent_nodes: BTreeSet<String>,
+}
+
 pub struct Engine {
     entries: HashMap<String, Entry>,
     constants: HashMap<String, f64>,
     functions: FunctionRegistry,
-    reverse_dependencies: HashMap<String, BTreeSet<String>>,
+    dependency_graph: DiGraph<String, ()>,
+    node_indices: HashMap<String, NodeIndex>,
     next_result_index: usize,
 }
 
@@ -42,7 +53,8 @@ impl Engine {
                 ("pi".to_string(), std::f64::consts::PI),
             ]),
             functions: FunctionRegistry::standard(),
-            reverse_dependencies: HashMap::new(),
+            dependency_graph: DiGraph::new(),
+            node_indices: HashMap::new(),
             next_result_index: 1,
         }
     }
@@ -85,7 +97,7 @@ impl Engine {
         };
 
         self.entries.insert(id.clone(), entry);
-        self.rebuild_reverse_dependencies();
+        self.rebuild_dependency_graph();
         self.recompute_affected(&id);
 
         match &self.entries[&id].state {
@@ -108,7 +120,7 @@ impl Engine {
         let affected = self.collect_affected(id);
         let removed = self.entries.remove(id);
         if removed.is_some() {
-            self.rebuild_reverse_dependencies();
+            self.rebuild_dependency_graph();
             self.recompute_ids(affected);
         }
         removed
@@ -124,6 +136,58 @@ impl Engine {
 
     pub fn entries(&self) -> impl Iterator<Item = (&str, &Entry)> {
         self.entries.iter().map(|(id, entry)| (id.as_str(), entry))
+    }
+
+    pub fn cycle_diagnostics(&self) -> CycleDiagnostics {
+        let mut diagnostics = CycleDiagnostics::default();
+
+        for component in petgraph::algo::kosaraju_scc(&self.dependency_graph) {
+            let is_cycle = component.len() > 1
+                || component.iter().any(|&node| {
+                    self.dependency_graph
+                        .edges_directed(node, Direction::Outgoing)
+                        .any(|edge| edge.target() == node)
+                });
+
+            if !is_cycle {
+                continue;
+            }
+
+            let cycle = component
+                .iter()
+                .map(|&node| self.dependency_graph[node].clone())
+                .collect::<BTreeSet<_>>();
+            diagnostics.cycle_nodes.extend(cycle.iter().cloned());
+            diagnostics.cycles.push(cycle);
+        }
+
+        diagnostics.cycles.sort();
+
+        let mut stack = diagnostics
+            .cycle_nodes
+            .iter()
+            .filter_map(|id| self.node_indices.get(id).copied())
+            .collect::<Vec<_>>();
+        let mut visited = BTreeSet::new();
+
+        while let Some(current) = stack.pop() {
+            for dependent in self
+                .dependency_graph
+                .neighbors_directed(current, Direction::Outgoing)
+            {
+                let dependent_id = self.dependency_graph[dependent].clone();
+                if visited.insert(dependent_id.clone()) {
+                    stack.push(dependent);
+                }
+            }
+        }
+
+        diagnostics.dependent_nodes = visited
+            .difference(&diagnostics.cycle_nodes)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+
+        diagnostics
     }
 
     pub fn eval_once(&self, source: &str) -> Result<f64, DagcalError> {
@@ -159,14 +223,19 @@ impl Engine {
 
     fn collect_affected(&self, id: &str) -> BTreeSet<String> {
         let mut affected = BTreeSet::from([id.to_string()]);
-        let mut stack = vec![id.to_string()];
+        let Some(&start) = self.node_indices.get(id) else {
+            return affected;
+        };
+        let mut stack = vec![start];
 
         while let Some(current) = stack.pop() {
-            if let Some(dependents) = self.reverse_dependencies.get(&current) {
-                for dependent in dependents {
-                    if affected.insert(dependent.clone()) {
-                        stack.push(dependent.clone());
-                    }
+            for dependent in self
+                .dependency_graph
+                .neighbors_directed(current, Direction::Outgoing)
+            {
+                let dependent_id = self.dependency_graph[dependent].clone();
+                if affected.insert(dependent_id) {
+                    stack.push(dependent);
                 }
             }
         }
@@ -184,6 +253,10 @@ impl Engine {
     }
 
     fn evaluate_entry(&self, id: &str, stack: &mut Vec<String>) -> EntryState {
+        if self.cycle_diagnostics().cycle_nodes.contains(id) {
+            return EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(id.to_string())));
+        }
+
         if stack.iter().any(|seen| seen == id) {
             return EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(id.to_string())));
         }
@@ -221,9 +294,6 @@ impl Engine {
         if self.entries.contains_key(name) {
             match self.evaluate_entry(name, stack) {
                 EntryState::Value(value) => Ok(value),
-                EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(id))) => {
-                    Err(EvalError::CycleDetected(id))
-                }
                 EntryState::Error(_) => Err(EvalError::DependencyError(name.to_string())),
             }
         } else if let Some(value) = self.constants.get(name) {
@@ -233,17 +303,23 @@ impl Engine {
         }
     }
 
-    fn rebuild_reverse_dependencies(&mut self) {
-        let ids = self.entries.keys().cloned().collect::<HashSet<_>>();
-        self.reverse_dependencies.clear();
+    fn rebuild_dependency_graph(&mut self) {
+        self.dependency_graph = DiGraph::new();
+        self.node_indices.clear();
+
+        for id in self.entries.keys() {
+            let node = self.dependency_graph.add_node(id.clone());
+            self.node_indices.insert(id.clone(), node);
+        }
 
         for (id, entry) in &self.entries {
+            let Some(&dependent) = self.node_indices.get(id) else {
+                continue;
+            };
+
             for reference in &entry.references {
-                if ids.contains(reference) {
-                    self.reverse_dependencies
-                        .entry(reference.clone())
-                        .or_default()
-                        .insert(id.clone());
+                if let Some(&dependency) = self.node_indices.get(reference) {
+                    self.dependency_graph.add_edge(dependency, dependent, ());
                 }
             }
         }
@@ -462,6 +538,101 @@ mod tests {
             "a",
             |err| matches!(err, EvalError::CycleDetected(name) if name == "a"),
         );
+
+        let diagnostics = engine.cycle_diagnostics();
+        assert_eq!(diagnostics.cycles, vec![BTreeSet::from(["a".to_string()])]);
+        assert_eq!(diagnostics.cycle_nodes, BTreeSet::from(["a".to_string()]));
+        assert!(diagnostics.dependent_nodes.is_empty());
+    }
+
+    #[test]
+    fn reports_cycle_nodes_and_all_dependents() {
+        let mut engine = Engine::new();
+
+        assert!(engine.set_expr("a", "b + 1").is_err());
+        assert!(engine.set_expr("b", "a + 1").is_err());
+        assert!(engine.set_expr("c", "a + 1").is_err());
+        assert!(engine.set_expr("d", "c + 1").is_err());
+        engine.set_expr("ok", "10").unwrap();
+
+        let diagnostics = engine.cycle_diagnostics();
+
+        assert_eq!(
+            diagnostics.cycles,
+            vec![BTreeSet::from(["a".to_string(), "b".to_string()])]
+        );
+        assert_eq!(
+            diagnostics.cycle_nodes,
+            BTreeSet::from(["a".to_string(), "b".to_string()])
+        );
+        assert_eq!(
+            diagnostics.dependent_nodes,
+            BTreeSet::from(["c".to_string(), "d".to_string()])
+        );
+        assert_eval_error(
+            &engine,
+            "c",
+            |err| matches!(err, EvalError::DependencyError(name) if name == "a"),
+        );
+        assert_eval_error(
+            &engine,
+            "d",
+            |err| matches!(err, EvalError::DependencyError(name) if name == "c"),
+        );
+        assert_value(&engine, "ok", 10.0);
+    }
+
+    #[test]
+    fn reports_multiple_independent_cycles() {
+        let mut engine = Engine::new();
+
+        assert!(engine.set_expr("a", "b + 1").is_err());
+        assert!(engine.set_expr("b", "a + 1").is_err());
+        assert!(engine.set_expr("x", "y + 1").is_err());
+        assert!(engine.set_expr("y", "x + 1").is_err());
+        assert!(engine.set_expr("z", "x + a").is_err());
+
+        let diagnostics = engine.cycle_diagnostics();
+
+        assert_eq!(
+            diagnostics.cycles,
+            vec![
+                BTreeSet::from(["a".to_string(), "b".to_string()]),
+                BTreeSet::from(["x".to_string(), "y".to_string()])
+            ]
+        );
+        assert_eq!(
+            diagnostics.cycle_nodes,
+            BTreeSet::from([
+                "a".to_string(),
+                "b".to_string(),
+                "x".to_string(),
+                "y".to_string()
+            ])
+        );
+        assert_eq!(
+            diagnostics.dependent_nodes,
+            BTreeSet::from(["z".to_string()])
+        );
+    }
+
+    #[test]
+    fn clearing_cycle_clears_diagnostics_and_recomputes_dependents() {
+        let mut engine = Engine::new();
+
+        assert!(engine.set_expr("a", "b + 1").is_err());
+        assert!(engine.set_expr("b", "a + 1").is_err());
+        assert!(engine.set_expr("c", "a + 1").is_err());
+        assert!(!engine.cycle_diagnostics().cycle_nodes.is_empty());
+
+        engine.set_expr("a", "1").unwrap();
+
+        let diagnostics = engine.cycle_diagnostics();
+        assert!(diagnostics.cycles.is_empty());
+        assert!(diagnostics.cycle_nodes.is_empty());
+        assert!(diagnostics.dependent_nodes.is_empty());
+        assert_value(&engine, "b", 2.0);
+        assert_value(&engine, "c", 2.0);
     }
 
     #[test]

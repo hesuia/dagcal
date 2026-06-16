@@ -6,4 +6,5 @@ edition = "2024"
 [dependencies]
 pest = "2.8.6"
 pest_derive = "2.8.6"
+petgraph = "0.8.3"
 thiserror = "2.0"
