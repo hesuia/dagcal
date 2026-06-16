@@ -16,6 +16,28 @@ pub struct Entry {
     pub state: EntryState,
 }
 
+impl Entry {
+    fn from_parsed(source: String, ast: Expr, id: &str) -> Self {
+        Self {
+            source,
+            references: ast.references(),
+            ast: Some(ast),
+            state: EntryState::Error(DagcalError::Eval(EvalError::DependencyError(
+                id.to_string(),
+            ))),
+        }
+    }
+
+    fn from_parse_error(source: String, err: DagcalError) -> Self {
+        Self {
+            source,
+            ast: None,
+            references: BTreeSet::new(),
+            state: EntryState::Error(err),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum EntryState {
     Value(f64),
@@ -79,31 +101,16 @@ impl Engine {
     ) -> Result<(), DagcalError> {
         let id = id.into();
         let source = source.into();
-        let parsed = parse_expression(&source);
-
-        let entry = match parsed {
-            Ok(ast) => Entry {
-                source,
-                references: ast.references(),
-                ast: Some(ast),
-                state: EntryState::Error(DagcalError::Eval(EvalError::DependencyError(id.clone()))),
-            },
-            Err(err) => Entry {
-                source,
-                ast: None,
-                references: BTreeSet::new(),
-                state: EntryState::Error(err.clone()),
-            },
+        let entry = match parse_expression(&source) {
+            Ok(ast) => Entry::from_parsed(source, ast, &id),
+            Err(err) => Entry::from_parse_error(source, err.clone()),
         };
 
         self.entries.insert(id.clone(), entry);
         self.rebuild_dependency_graph();
         self.recompute_affected(&id);
 
-        match &self.entries[&id].state {
-            EntryState::Value(_) => Ok(()),
-            EntryState::Error(err) => Err(err.clone()),
-        }
+        self.state_result(&id)
     }
 
     pub fn append_expr(&mut self, source: impl Into<String>) -> (String, EntryState) {
@@ -163,26 +170,14 @@ impl Engine {
 
         diagnostics.cycles.sort();
 
-        let mut stack = diagnostics
+        let cycle_start_nodes = diagnostics
             .cycle_nodes
             .iter()
             .filter_map(|id| self.node_indices.get(id).copied())
             .collect::<Vec<_>>();
-        let mut visited = BTreeSet::new();
 
-        while let Some(current) = stack.pop() {
-            for dependent in self
-                .dependency_graph
-                .neighbors_directed(current, Direction::Outgoing)
-            {
-                let dependent_id = self.dependency_graph[dependent].clone();
-                if visited.insert(dependent_id.clone()) {
-                    stack.push(dependent);
-                }
-            }
-        }
-
-        diagnostics.dependent_nodes = visited
+        diagnostics.dependent_nodes = self
+            .collect_dependents(cycle_start_nodes)
             .difference(&diagnostics.cycle_nodes)
             .cloned()
             .collect::<BTreeSet<_>>();
@@ -226,7 +221,17 @@ impl Engine {
         let Some(&start) = self.node_indices.get(id) else {
             return affected;
         };
-        let mut stack = vec![start];
+
+        affected.extend(self.collect_dependents([start]));
+        affected
+    }
+
+    fn collect_dependents<I>(&self, starts: I) -> BTreeSet<String>
+    where
+        I: IntoIterator<Item = NodeIndex>,
+    {
+        let mut dependents = BTreeSet::new();
+        let mut stack = starts.into_iter().collect::<Vec<_>>();
 
         while let Some(current) = stack.pop() {
             for dependent in self
@@ -234,13 +239,13 @@ impl Engine {
                 .neighbors_directed(current, Direction::Outgoing)
             {
                 let dependent_id = self.dependency_graph[dependent].clone();
-                if affected.insert(dependent_id) {
+                if dependents.insert(dependent_id) {
                     stack.push(dependent);
                 }
             }
         }
 
-        affected
+        dependents
     }
 
     fn recompute_ids(&mut self, ids: BTreeSet<String>) {
@@ -322,6 +327,13 @@ impl Engine {
                     self.dependency_graph.add_edge(dependency, dependent, ());
                 }
             }
+        }
+    }
+
+    fn state_result(&self, id: &str) -> Result<(), DagcalError> {
+        match &self.entries[id].state {
+            EntryState::Value(_) => Ok(()),
+            EntryState::Error(err) => Err(err.clone()),
         }
     }
 }

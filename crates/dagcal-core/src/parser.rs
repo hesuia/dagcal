@@ -24,8 +24,8 @@ pub fn parse_expression(source: &str) -> Result<Expr, DagcalError> {
 fn build_expr(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
     match pair.as_rule() {
         Rule::expr => build_only_child(pair),
-        Rule::add => build_left_assoc(pair, &[Rule::add_op]),
-        Rule::mul => build_left_assoc(pair, &[Rule::mul_op]),
+        Rule::add => build_left_assoc(pair),
+        Rule::mul => build_left_assoc(pair),
         Rule::unary => build_unary(pair),
         Rule::pow => build_pow(pair),
         Rule::primary => build_only_child(pair),
@@ -53,7 +53,7 @@ fn build_only_child(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
     build_expr(child)
 }
 
-fn build_left_assoc(pair: Pair<'_, Rule>, _op_rules: &[Rule]) -> Result<Expr, DagcalError> {
+fn build_left_assoc(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
     let mut inner = pair.into_inner();
     let first = inner
         .next()
