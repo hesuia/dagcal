@@ -4,12 +4,14 @@ mod engine;
 mod error;
 mod eval;
 mod function;
+mod id;
 mod parser;
 
 pub use ast::{BinaryOp, Expr, UnaryOp};
 pub use engine::{CycleDiagnostics, Engine, Entry, EntryState};
 pub use error::{DagcalError, EvalError};
 pub use function::{Function, FunctionRegistry};
+pub use id::{ExpressionId, ExpressionIdGenerator};
 pub use parser::parse_expression;
 
 #[cfg(test)]

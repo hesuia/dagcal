@@ -3,11 +3,14 @@ use crate::dependency_graph::ReferenceGraph;
 use crate::error::{DagcalError, EvalError};
 use crate::eval::eval_expr;
 use crate::function::FunctionRegistry;
+use crate::id::{ExpressionId, ExpressionIdGenerator};
 use crate::parser::parse_expression;
 use std::collections::{BTreeSet, HashMap};
 
 #[derive(Debug, Clone)]
 pub struct Entry {
+    pub id: ExpressionId,
+    pub label: String,
     pub source: String,
     pub ast: Option<Expr>,
     pub references: BTreeSet<String>,
@@ -15,8 +18,10 @@ pub struct Entry {
 }
 
 impl Entry {
-    fn from_parsed(source: String, ast: Expr, id: &str) -> Self {
+    fn from_parsed(id: ExpressionId, label: String, source: String, ast: Expr) -> Self {
         Self {
+            id,
+            label,
             source,
             references: ast.references(),
             ast: Some(ast),
@@ -26,8 +31,10 @@ impl Entry {
         }
     }
 
-    fn from_parse_error(source: String, err: DagcalError) -> Self {
+    fn from_parse_error(id: ExpressionId, label: String, source: String, err: DagcalError) -> Self {
         Self {
+            id,
+            label,
             source,
             ast: None,
             references: BTreeSet::new(),
@@ -50,10 +57,12 @@ pub struct CycleDiagnostics {
 }
 
 pub struct Engine {
-    entries: HashMap<String, Entry>,
+    entries: HashMap<ExpressionId, Entry>,
+    labels: HashMap<String, ExpressionId>,
     constants: HashMap<String, f64>,
     functions: FunctionRegistry,
     dependency_graph: ReferenceGraph,
+    id_generator: ExpressionIdGenerator,
     next_result_index: usize,
 }
 
@@ -67,12 +76,14 @@ impl Engine {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            labels: HashMap::new(),
             constants: HashMap::from([
                 ("e".to_string(), std::f64::consts::E),
                 ("pi".to_string(), std::f64::consts::PI),
             ]),
             functions: FunctionRegistry::standard(),
             dependency_graph: ReferenceGraph::new(),
+            id_generator: ExpressionIdGenerator::new(),
             next_result_index: 1,
         }
     }
@@ -95,14 +106,15 @@ impl Engine {
         id: impl Into<String>,
         source: impl Into<String>,
     ) -> Result<(), DagcalError> {
-        let id = id.into();
+        let label = id.into();
         let source = source.into();
+        let id = self.resolve_or_create_id(&label);
         let entry = match parse_expression(&source) {
-            Ok(ast) => Entry::from_parsed(source, ast, &id),
-            Err(err) => Entry::from_parse_error(source, err.clone()),
+            Ok(ast) => Entry::from_parsed(id, label.clone(), source, ast),
+            Err(err) => Entry::from_parse_error(id, label.clone(), source, err.clone()),
         };
 
-        self.entries.insert(id.clone(), entry);
+        self.entries.insert(id, entry);
         self.rebuild_dependency_graph();
         self.recompute_affected(&id);
 
@@ -110,18 +122,24 @@ impl Engine {
     }
 
     pub fn append_expr(&mut self, source: impl Into<String>) -> (String, EntryState) {
-        let id = self.allocate_result_id();
-        let _ = self.set_expr(id.clone(), source);
-        let state = self.get(&id).cloned().unwrap_or_else(|| {
-            EntryState::Error(DagcalError::Eval(EvalError::UnknownReference(id.clone())))
+        let id = self.id_generator.next();
+        let label = self.allocate_result_label();
+        self.labels.insert(label.clone(), id);
+        let _ = self.set_expr(label.clone(), source);
+        let state = self.get(&label).cloned().unwrap_or_else(|| {
+            EntryState::Error(DagcalError::Eval(EvalError::UnknownReference(
+                label.clone(),
+            )))
         });
 
-        (id, state)
+        (label, state)
     }
 
-    pub fn remove_expr(&mut self, id: &str) -> Option<Entry> {
+    pub fn remove_expr(&mut self, label: &str) -> Option<Entry> {
+        let id = self.labels.get(label).copied()?;
         let affected = self.collect_affected(id);
-        let removed = self.entries.remove(id);
+        self.labels.remove(label);
+        let removed = self.entries.remove(&id);
         if removed.is_some() {
             self.rebuild_dependency_graph();
             self.recompute_ids(affected);
@@ -129,25 +147,41 @@ impl Engine {
         removed
     }
 
-    pub fn get(&self, id: &str) -> Option<&EntryState> {
-        self.entries.get(id).map(|entry| &entry.state)
+    pub fn get(&self, label: &str) -> Option<&EntryState> {
+        self.entry(label).map(|entry| &entry.state)
     }
 
-    pub fn entry(&self, id: &str) -> Option<&Entry> {
-        self.entries.get(id)
+    /// Returns the current state for an expression by its internal ID.
+    pub fn get_by_id(&self, id: ExpressionId) -> Option<&EntryState> {
+        self.entry_by_id(id).map(|entry| &entry.state)
+    }
+
+    pub fn entry(&self, label: &str) -> Option<&Entry> {
+        self.labels.get(label).and_then(|id| self.entries.get(id))
+    }
+
+    /// Returns a stored expression by its internal ID.
+    pub fn entry_by_id(&self, id: ExpressionId) -> Option<&Entry> {
+        self.entries.get(&id)
     }
 
     pub fn entries(&self) -> impl Iterator<Item = (&str, &Entry)> {
-        self.entries.iter().map(|(id, entry)| (id.as_str(), entry))
+        self.entries
+            .values()
+            .map(|entry| (entry.label.as_str(), entry))
     }
 
     pub fn cycle_diagnostics(&self) -> CycleDiagnostics {
         let report = self.dependency_graph.cycle_report();
 
         CycleDiagnostics {
-            cycles: report.cycles,
-            cycle_nodes: report.cycle_nodes,
-            dependent_nodes: report.dependent_nodes,
+            cycles: report
+                .cycles
+                .into_iter()
+                .map(|cycle| self.labels_for_ids(&cycle))
+                .collect(),
+            cycle_nodes: self.labels_for_ids(&report.cycle_nodes),
+            dependent_nodes: self.labels_for_ids(&report.dependent_nodes),
         }
     }
 
@@ -158,35 +192,36 @@ impl Engine {
     }
 
     fn recompute_all(&mut self) {
-        let ids = self.entries.keys().cloned().collect::<BTreeSet<_>>();
+        let ids = self.entries.keys().copied().collect::<BTreeSet<_>>();
         self.recompute_ids(ids);
     }
 
-    fn allocate_result_id(&mut self) -> String {
+    fn allocate_result_label(&mut self) -> String {
         loop {
-            let id = format!("${}", self.next_result_index);
+            let label = format!("${}", self.next_result_index);
             self.next_result_index += 1;
-            if !self.entries.contains_key(&id) {
-                return id;
+            if !self.labels.contains_key(&label) {
+                return label;
             }
         }
     }
 
-    fn recompute_affected(&mut self, id: &str) {
-        let affected = self.collect_affected(id);
+    fn recompute_affected(&mut self, id: &ExpressionId) {
+        let affected = self.collect_affected(*id);
         self.recompute_ids(affected);
     }
 
-    fn collect_affected(&self, id: &str) -> BTreeSet<String> {
+    fn collect_affected(&self, id: ExpressionId) -> BTreeSet<ExpressionId> {
         self.dependency_graph.affected_by(id)
     }
 
-    fn recompute_ids(&mut self, ids: BTreeSet<String>) {
+    fn recompute_ids(&mut self, ids: BTreeSet<ExpressionId>) {
         let cycle_nodes = self.dependency_graph.cycle_report().cycle_nodes;
         for id in ids.intersection(&cycle_nodes) {
             if let Some(entry) = self.entries.get_mut(id) {
-                entry.state =
-                    EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(id.clone())));
+                entry.state = EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(
+                    entry.label.clone(),
+                )));
             }
         }
 
@@ -202,14 +237,21 @@ impl Engine {
         }
     }
 
-    fn evaluate_entry(&self, id: &str) -> EntryState {
-        if self.cycle_diagnostics().cycle_nodes.contains(id) {
-            return EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(id.to_string())));
+    fn evaluate_entry(&self, id: &ExpressionId) -> EntryState {
+        if self
+            .dependency_graph
+            .cycle_report()
+            .cycle_nodes
+            .contains(id)
+        {
+            return EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(
+                self.label_for_id(*id),
+            )));
         }
 
         let Some(entry) = self.entries.get(id) else {
             return EntryState::Error(DagcalError::Eval(EvalError::UnknownReference(
-                id.to_string(),
+                self.label_for_id(*id),
             )));
         };
 
@@ -227,7 +269,7 @@ impl Engine {
     }
 
     fn resolve_reference(&self, name: &str) -> Result<f64, EvalError> {
-        if let Some(entry) = self.entries.get(name) {
+        if let Some(entry) = self.entry(name) {
             match &entry.state {
                 EntryState::Value(value) => Ok(*value),
                 EntryState::Error(_) => Err(EvalError::DependencyError(name.to_string())),
@@ -240,19 +282,56 @@ impl Engine {
     }
 
     fn rebuild_dependency_graph(&mut self) {
-        self.dependency_graph.rebuild(
-            self.entries
-                .iter()
-                .map(|(id, entry)| (id.as_str(), &entry.references)),
-        );
+        let labels = &self.labels;
+        self.dependency_graph
+            .rebuild(self.entries.iter().map(|(id, entry)| {
+                let references = entry
+                    .references
+                    .iter()
+                    .filter_map(|reference| labels.get(reference).copied())
+                    .collect::<BTreeSet<_>>();
+                (*id, references)
+            }));
     }
 
-    fn state_result(&self, id: &str) -> Result<(), DagcalError> {
+    fn state_result(&self, id: &ExpressionId) -> Result<(), DagcalError> {
         match &self.entries[id].state {
             EntryState::Value(_) => Ok(()),
             EntryState::Error(err) => Err(err.clone()),
         }
     }
+
+    fn resolve_or_create_id(&mut self, label: &str) -> ExpressionId {
+        if let Some(id) = self.labels.get(label) {
+            return *id;
+        }
+
+        let id = self.id_generator.next();
+        if let Some(index) = parse_result_index(label) {
+            self.reserve_result_label_through(index);
+        }
+        self.labels.insert(label.to_string(), id);
+        id
+    }
+
+    fn label_for_id(&self, id: ExpressionId) -> String {
+        self.entries
+            .get(&id)
+            .map(|entry| entry.label.clone())
+            .unwrap_or_else(|| id.to_string())
+    }
+
+    fn labels_for_ids(&self, ids: &BTreeSet<ExpressionId>) -> BTreeSet<String> {
+        ids.iter().map(|id| self.label_for_id(*id)).collect()
+    }
+
+    fn reserve_result_label_through(&mut self, index: usize) {
+        self.next_result_index = self.next_result_index.max(index + 1);
+    }
+}
+
+fn parse_result_index(label: &str) -> Option<usize> {
+    label.strip_prefix('$')?.parse().ok()
 }
 
 #[cfg(test)]
@@ -687,6 +766,42 @@ mod tests {
 
         assert_eq!(id, "$2");
         assert_eq!(state, EntryState::Value(101.0));
+    }
+
+    #[test]
+    fn explicit_numbered_result_reserves_sequential_expression_id() {
+        let mut engine = Engine::new();
+
+        engine.set_expr("$5", "100").unwrap();
+        let (id, state) = engine.append_expr("$5 + 1");
+
+        assert_eq!(id, "$6");
+        assert_eq!(state, EntryState::Value(101.0));
+    }
+
+    #[test]
+    fn exposes_entries_by_internal_expression_id() {
+        let mut engine = Engine::new();
+
+        let (label, _) = engine.append_expr("40 + 2");
+        let entry = engine.entry(&label).unwrap();
+        let id = entry.id;
+
+        assert_eq!(engine.get_by_id(id), Some(&EntryState::Value(42.0)));
+        assert_eq!(engine.entry_by_id(id).unwrap().label, "$1");
+    }
+
+    #[test]
+    fn named_labels_resolve_to_internal_expression_ids() {
+        let mut engine = Engine::new();
+
+        engine.set_expr("subtotal", "100").unwrap();
+        let id = engine.entry("subtotal").unwrap().id;
+        engine.set_expr("taxed", "subtotal * 1.1").unwrap();
+        engine.set_expr("subtotal", "200").unwrap();
+
+        assert_eq!(engine.entry("subtotal").unwrap().id, id);
+        assert_value(&engine, "taxed", 220.00000000000003);
     }
 
     #[test]
