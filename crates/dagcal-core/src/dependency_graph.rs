@@ -12,6 +12,12 @@ pub(crate) struct CycleReport {
     pub(crate) dependent_nodes: BTreeSet<ExpressionId>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct GraphAnalysis {
+    pub(crate) cycle_report: CycleReport,
+    pub(crate) evaluation_order: Vec<ExpressionId>,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ReferenceGraph {
     graph: DiGraph<ExpressionId, ()>,
@@ -61,9 +67,23 @@ impl ReferenceGraph {
     }
 
     pub(crate) fn cycle_report(&self) -> CycleReport {
+        let components = kosaraju_scc(&self.graph);
+        self.cycle_report_from_components(&components)
+    }
+
+    pub(crate) fn analyze(&self, ids: &BTreeSet<ExpressionId>) -> GraphAnalysis {
+        let components = kosaraju_scc(&self.graph);
+
+        GraphAnalysis {
+            cycle_report: self.cycle_report_from_components(&components),
+            evaluation_order: self.evaluation_order_from_components(&components, ids),
+        }
+    }
+
+    fn cycle_report_from_components(&self, components: &[Vec<NodeIndex>]) -> CycleReport {
         let mut report = CycleReport::default();
 
-        for component in kosaraju_scc(&self.graph) {
+        for component in components {
             let is_cycle =
                 component.len() > 1 || component.iter().any(|&node| self.has_self_reference(node));
 
@@ -89,14 +109,18 @@ impl ReferenceGraph {
         report
     }
 
-    pub(crate) fn evaluation_order(&self, ids: BTreeSet<ExpressionId>) -> Vec<ExpressionId> {
-        let mut ordered = kosaraju_scc(&self.graph)
-            .into_iter()
+    fn evaluation_order_from_components(
+        &self,
+        components: &[Vec<NodeIndex>],
+        ids: &BTreeSet<ExpressionId>,
+    ) -> Vec<ExpressionId> {
+        let mut ordered = components
+            .iter()
             .rev()
             .flat_map(|component| {
                 let mut component_ids = component
-                    .into_iter()
-                    .map(|node| self.graph[node])
+                    .iter()
+                    .map(|node| self.graph[*node])
                     .filter(|id| ids.contains(id))
                     .collect::<Vec<_>>();
                 component_ids.sort();
@@ -105,7 +129,7 @@ impl ReferenceGraph {
             .collect::<Vec<_>>();
 
         let present = ordered.iter().copied().collect::<BTreeSet<_>>();
-        ordered.extend(ids.into_iter().filter(|id| !present.contains(id)));
+        ordered.extend(ids.iter().copied().filter(|id| !present.contains(id)));
         ordered
     }
 

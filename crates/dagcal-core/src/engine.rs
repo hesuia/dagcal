@@ -261,7 +261,9 @@ impl Engine {
     }
 
     fn recompute_ids(&mut self, ids: BTreeSet<ExpressionId>) {
-        let cycle_nodes = self.dependency_graph.cycle_report().cycle_nodes;
+        let analysis = self.dependency_graph.analyze(&ids);
+        let cycle_nodes = analysis.cycle_report.cycle_nodes;
+
         for id in ids.intersection(&cycle_nodes) {
             if let Some(entry) = self.entries.get_mut(id) {
                 entry.state = EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(
@@ -270,7 +272,7 @@ impl Engine {
             }
         }
 
-        for current in self.dependency_graph.evaluation_order(ids) {
+        for current in analysis.evaluation_order {
             if cycle_nodes.contains(&current) {
                 continue;
             }
@@ -283,17 +285,6 @@ impl Engine {
     }
 
     fn evaluate_entry(&self, id: &ExpressionId) -> EntryState {
-        if self
-            .dependency_graph
-            .cycle_report()
-            .cycle_nodes
-            .contains(id)
-        {
-            return EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(
-                self.label_for_id(*id),
-            )));
-        }
-
         let Some(entry) = self.entries.get(id) else {
             return EntryState::Error(DagcalError::Eval(EvalError::UnknownReference(
                 self.label_for_id(*id),
