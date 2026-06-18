@@ -1,6 +1,8 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
 calculation = { SOI ~ expr ~ EOI }
+statement = { SOI ~ (definition | expr) ~ EOI }
+definition = { ident ~ "=" ~ expr }
 expr = { add }
 add = { mul ~ (add_op ~ mul)* }
 add_op = { "+" | "-" }

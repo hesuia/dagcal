@@ -1,4 +1,4 @@
-use dagcal_core::{Engine, EntryState};
+use dagcal_core::{Engine, EntryState, Execution};
 use std::io::{self, Write};
 
 fn main() {
@@ -79,10 +79,9 @@ impl Repl {
             }
             ":set" => {
                 match split_command_args(input[":set".len()..].trim()) {
-                    Some((id, source)) if is_valid_entry_id(id) => {
+                    Some((id, source)) => {
                         self.set_and_print(id, source);
                     }
-                    Some((id, _)) => println!("invalid id: {id}"),
                     None => println!("usage: :set <id> <expr>"),
                 }
                 true
@@ -91,7 +90,7 @@ impl Repl {
                 let id = input[":remove".len()..].trim();
                 if id.is_empty() {
                     println!("usage: :remove <id>");
-                } else if self.engine.remove_expr(id).is_some() {
+                } else if self.engine.remove_entry(id).is_some() {
                     println!("removed {id}");
                 } else {
                     println!("not found: {id}");
@@ -107,36 +106,27 @@ impl Repl {
     }
 
     fn handle_expression(&mut self, input: &str) {
-        match parse_assignment(input) {
-            Assignment::Named { id, source } => self.set_and_print(id, source),
-            Assignment::InvalidId(id) => println!("invalid id: {id}"),
-            Assignment::Malformed => println!("invalid assignment; use name = expr"),
-            Assignment::Expression(source) => {
-                let (id, state) = self.engine.append_expr(source);
-                print_state(&id, &state);
-            }
-        }
+        print_execution(&self.engine.execute(input));
     }
 
     fn set_and_print(&mut self, id: &str, source: &str) {
-        let _ = self.engine.set_expr(id, source);
-        match self.engine.get(id) {
-            Some(state) => print_state(id, state),
-            None => println!("error: entry was not saved"),
+        match self.engine.set_entry(id, source) {
+            Ok(state) => print_state(id, &state),
+            Err(err) => println!("{id} = error: {err}"),
         }
     }
 
     fn print_entries(&self) {
         let mut entries = self.engine.entries().collect::<Vec<_>>();
-        entries.sort_by(|(left, _), (right, _)| compare_entry_ids(left, right));
+        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
 
         if entries.is_empty() {
             println!("no entries");
             return;
         }
 
-        for (id, entry) in entries {
-            print!("{id} = {} => ", entry.source);
+        for (label, entry) in entries {
+            print!("{label} = {} => ", entry.source);
             print_state_value(&entry.state);
         }
     }
@@ -154,73 +144,16 @@ fn split_command_args(input: &str) -> Option<(&str, &str)> {
     }
 }
 
-enum Assignment<'a> {
-    Named { id: &'a str, source: &'a str },
-    InvalidId(&'a str),
-    Malformed,
-    Expression(&'a str),
-}
-
-fn parse_assignment(input: &str) -> Assignment<'_> {
-    let Some((left, right)) = input.split_once('=') else {
-        return Assignment::Expression(input);
-    };
-
-    if right.contains('=') {
-        return Assignment::Malformed;
-    }
-
-    let id = left.trim();
-    let source = right.trim();
-    if id.is_empty() || source.is_empty() {
-        return Assignment::Malformed;
-    }
-
-    if is_valid_entry_id(id) && !id.starts_with('$') {
-        Assignment::Named { id, source }
-    } else {
-        Assignment::InvalidId(id)
-    }
-}
-
-fn is_valid_entry_id(id: &str) -> bool {
-    is_valid_named_id(id) || is_valid_result_id(id)
-}
-
-fn is_valid_named_id(id: &str) -> bool {
-    let mut chars = id.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-
-    (first.is_ascii_alphabetic() || first == '_')
-        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-}
-
-fn is_valid_result_id(id: &str) -> bool {
-    let Some(digits) = id.strip_prefix('$') else {
-        return false;
-    };
-
-    !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit())
-}
-
-fn compare_entry_ids(left: &str, right: &str) -> std::cmp::Ordering {
-    match (parse_result_index(left), parse_result_index(right)) {
-        (Some(left_index), Some(right_index)) => left_index.cmp(&right_index),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => left.cmp(right),
-    }
-}
-
-fn parse_result_index(id: &str) -> Option<usize> {
-    id.strip_prefix('$')?.parse().ok()
-}
-
 fn print_state(id: &str, state: &EntryState) {
     print!("{id} = ");
     print_state_value(state);
+}
+
+fn print_execution(execution: &Execution) {
+    match &execution.label {
+        Some(label) => print_state(&label.to_string(), &execution.state),
+        None => print_state_value(&execution.state),
+    }
 }
 
 fn print_state_value(state: &EntryState) {
@@ -265,24 +198,5 @@ mod tests {
     fn rejects_incomplete_set_command_arguments() {
         assert_eq!(split_command_args("subtotal"), None);
         assert_eq!(split_command_args("subtotal   "), None);
-    }
-
-    #[test]
-    fn parses_named_assignments() {
-        match parse_assignment("subtotal = 100 + 20") {
-            Assignment::Named { id, source } => {
-                assert_eq!(id, "subtotal");
-                assert_eq!(source, "100 + 20");
-            }
-            _ => panic!("expected named assignment"),
-        }
-    }
-
-    #[test]
-    fn leaves_plain_expressions_unassigned() {
-        match parse_assignment("$1 + 10") {
-            Assignment::Expression(source) => assert_eq!(source, "$1 + 10"),
-            _ => panic!("expected expression"),
-        }
     }
 }

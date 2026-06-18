@@ -1,5 +1,6 @@
-use crate::ast::{BinaryOp, Expr, UnaryOp};
+use crate::ast::{BinaryOp, Expr, Statement, UnaryOp};
 use crate::error::DagcalError;
+use crate::label::EntryLabel;
 use pest::Parser;
 use pest::iterators::Pair;
 use pest_derive::Parser;
@@ -21,6 +22,38 @@ pub fn parse_expression(source: &str) -> Result<Expr, DagcalError> {
     build_expr(expr)
 }
 
+pub fn parse_statement(source: &str) -> Result<Statement, DagcalError> {
+    let mut pairs = DagParser::parse(Rule::statement, source)
+        .map_err(|err| DagcalError::Parse(err.to_string()))?;
+    let pair = pairs
+        .next()
+        .ok_or_else(|| DagcalError::Parse("empty statement".to_string()))?;
+    let statement = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| DagcalError::Parse("empty statement".to_string()))?;
+
+    match statement.as_rule() {
+        Rule::definition => build_definition(statement),
+        _ => build_expr(statement).map(Statement::Expression),
+    }
+}
+
+fn build_definition(pair: Pair<'_, Rule>) -> Result<Statement, DagcalError> {
+    let mut inner = pair.into_inner();
+    let name = inner
+        .next()
+        .ok_or_else(|| DagcalError::Parse("expected definition name".to_string()))?;
+    let expr = inner
+        .next()
+        .ok_or_else(|| DagcalError::Parse("expected definition expression".to_string()))?;
+
+    Ok(Statement::Definition {
+        name: EntryLabel::named(name.as_str())?,
+        expr: build_expr(expr)?,
+    })
+}
+
 fn build_expr(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
     match pair.as_rule() {
         Rule::expr => build_only_child(pair),
@@ -37,7 +70,7 @@ fn build_expr(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
             .map_err(|err| {
                 DagcalError::Parse(format!("invalid number `{}`: {err}", pair.as_str()))
             }),
-        Rule::ident | Rule::result_ref => Ok(Expr::Reference(pair.as_str().to_string())),
+        Rule::ident | Rule::result_ref => Ok(Expr::Reference(EntryLabel::parse(pair.as_str())?)),
         _ => Err(DagcalError::Parse(format!(
             "unexpected parser rule {:?}",
             pair.as_rule()
@@ -193,7 +226,10 @@ mod tests {
 
         assert_eq!(
             expr.references(),
-            BTreeSet::from(["pi".to_string(), "x".to_string()])
+            BTreeSet::from([
+                EntryLabel::Named("pi".to_string()),
+                EntryLabel::Named("x".to_string())
+            ])
         );
     }
 
@@ -203,7 +239,11 @@ mod tests {
 
         assert_eq!(
             expr.references(),
-            BTreeSet::from(["$1".to_string(), "$20".to_string(), "subtotal".to_string()])
+            BTreeSet::from([
+                EntryLabel::Result(1),
+                EntryLabel::Result(20),
+                EntryLabel::Named("subtotal".to_string())
+            ])
         );
     }
 
@@ -213,8 +253,39 @@ mod tests {
 
         assert_eq!(
             expr.references(),
-            BTreeSet::from(["x".to_string(), "y".to_string()])
+            BTreeSet::from([
+                EntryLabel::Named("x".to_string()),
+                EntryLabel::Named("y".to_string())
+            ])
         );
+    }
+
+    #[test]
+    fn parses_named_definition_statements() {
+        let statement = parse_statement("subtotal = 100 + tax").unwrap();
+
+        match statement {
+            Statement::Definition { name, expr } => {
+                assert_eq!(name, EntryLabel::Named("subtotal".to_string()));
+                assert_eq!(
+                    expr.references(),
+                    BTreeSet::from([EntryLabel::Named("tax".to_string())])
+                );
+            }
+            other => panic!("expected definition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_expression_statements() {
+        let statement = parse_statement("$1 + 10").unwrap();
+
+        match statement {
+            Statement::Expression(expr) => {
+                assert_eq!(expr.references(), BTreeSet::from([EntryLabel::Result(1)]));
+            }
+            other => panic!("expected expression, got {other:?}"),
+        }
     }
 
     #[test]
@@ -226,5 +297,13 @@ mod tests {
         assert!(parse_expression("1..2").is_err());
         assert!(parse_expression("$").is_err());
         assert!(parse_expression("$abc").is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_definition_statements() {
+        assert!(parse_statement("$1 = 100").is_err());
+        assert!(parse_statement("= 1").is_err());
+        assert!(parse_statement("x =").is_err());
+        assert!(parse_statement("x = y = 1").is_err());
     }
 }

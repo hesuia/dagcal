@@ -1,11 +1,12 @@
 use crate::ast::{BinaryOp, Expr, UnaryOp};
 use crate::error::EvalError;
 use crate::function::FunctionRegistry;
+use crate::label::EntryLabel;
 
 pub(crate) fn eval_expr(
     expr: &Expr,
     functions: &FunctionRegistry,
-    resolve: &mut dyn FnMut(&str) -> Result<f64, EvalError>,
+    resolve: &mut dyn FnMut(&EntryLabel) -> Result<f64, EvalError>,
 ) -> Result<f64, EvalError> {
     match expr {
         Expr::Number(value) => Ok(*value),

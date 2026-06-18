@@ -5,14 +5,16 @@ mod error;
 mod eval;
 mod function;
 mod id;
+mod label;
 mod parser;
 
-pub use ast::{BinaryOp, Expr, UnaryOp};
-pub use engine::{CycleDiagnostics, Engine, Entry, EntryState};
+pub use ast::{BinaryOp, Expr, Statement, UnaryOp};
+pub use engine::{CycleDiagnostics, Engine, Entry, EntryState, Execution};
 pub use error::{DagcalError, EvalError};
 pub use function::{Function, FunctionRegistry};
 pub use id::{ExpressionId, ExpressionIdGenerator};
-pub use parser::parse_expression;
+pub use label::EntryLabel;
+pub use parser::{parse_expression, parse_statement};
 
 #[cfg(test)]
 mod tests {
@@ -106,7 +108,7 @@ mod tests {
     fn eval_once_can_reference_registered_entries() {
         let mut engine = Engine::new();
 
-        engine.set_expr("subtotal", "40").unwrap();
+        engine.set_entry("subtotal", "40").unwrap();
 
         assert_close(engine.eval_once("subtotal * 1.1").unwrap(), 44.0);
     }
@@ -115,7 +117,7 @@ mod tests {
     fn registering_function_recomputes_existing_entries() {
         let mut engine = Engine::new();
 
-        assert!(engine.set_expr("x", "triple(14)").is_err());
+        assert!(engine.set_entry("x", "triple(14)").is_err());
         engine.register_function("triple", 1, |args| Ok(args[0] * 3.0));
 
         assert_eq!(engine.get("x"), Some(&EntryState::Value(42.0)));

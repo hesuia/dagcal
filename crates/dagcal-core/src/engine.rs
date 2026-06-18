@@ -1,24 +1,25 @@
-use crate::ast::Expr;
+use crate::ast::{Expr, Statement};
 use crate::dependency_graph::ReferenceGraph;
 use crate::error::{DagcalError, EvalError};
 use crate::eval::eval_expr;
 use crate::function::FunctionRegistry;
 use crate::id::{ExpressionId, ExpressionIdGenerator};
-use crate::parser::parse_expression;
+use crate::label::EntryLabel;
+use crate::parser::{parse_expression, parse_statement};
 use std::collections::{BTreeSet, HashMap};
 
 #[derive(Debug, Clone)]
 pub struct Entry {
     pub id: ExpressionId,
-    pub label: String,
+    pub label: EntryLabel,
     pub source: String,
     pub ast: Option<Expr>,
-    pub references: BTreeSet<String>,
+    pub references: BTreeSet<EntryLabel>,
     pub state: EntryState,
 }
 
 impl Entry {
-    fn from_parsed(id: ExpressionId, label: String, source: String, ast: Expr) -> Self {
+    fn from_parsed(id: ExpressionId, label: EntryLabel, source: String, ast: Expr) -> Self {
         Self {
             id,
             label,
@@ -31,7 +32,12 @@ impl Entry {
         }
     }
 
-    fn from_parse_error(id: ExpressionId, label: String, source: String, err: DagcalError) -> Self {
+    fn from_parse_error(
+        id: ExpressionId,
+        label: EntryLabel,
+        source: String,
+        err: DagcalError,
+    ) -> Self {
         Self {
             id,
             label,
@@ -58,7 +64,7 @@ pub struct CycleDiagnostics {
 
 pub struct Engine {
     entries: HashMap<ExpressionId, Entry>,
-    labels: HashMap<String, ExpressionId>,
+    labels: HashMap<EntryLabel, ExpressionId>,
     constants: HashMap<String, f64>,
     functions: FunctionRegistry,
     dependency_graph: ReferenceGraph,
@@ -88,6 +94,27 @@ impl Engine {
         }
     }
 
+    /// Executes user input as either a named definition (`name = expr`) or an expression.
+    ///
+    /// Named definitions update or create the named entry. Plain expressions are appended as the
+    /// next available `$n` result entry.
+    pub fn execute(&mut self, input: &str) -> Execution {
+        match parse_statement(input) {
+            Ok(Statement::Definition { name, expr }) => {
+                let source = definition_source(input, &name);
+                self.save_parsed_entry(name, source, expr)
+            }
+            Ok(Statement::Expression(expr)) => {
+                let label = self.allocate_result_label();
+                self.save_parsed_entry(label, input.trim().to_string(), expr)
+            }
+            Err(err) => Execution {
+                label: None,
+                state: EntryState::Error(err),
+            },
+        }
+    }
+
     pub fn register_function<F>(&mut self, name: impl Into<String>, arity: usize, body: F)
     where
         F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
@@ -101,44 +128,32 @@ impl Engine {
         self.recompute_all();
     }
 
-    pub fn set_expr(
+    /// Sets or edits an entry by label.
+    ///
+    /// This is the explicit editing API for existing named entries and `$n` result entries.
+    pub fn set_entry(
         &mut self,
-        id: impl Into<String>,
+        label: impl AsRef<str>,
         source: impl Into<String>,
-    ) -> Result<(), DagcalError> {
-        let label = id.into();
+    ) -> Result<EntryState, DagcalError> {
+        let label = EntryLabel::parse(label.as_ref())?;
         let source = source.into();
-        let id = self.resolve_or_create_id(&label);
-        let entry = match parse_expression(&source) {
-            Ok(ast) => Entry::from_parsed(id, label.clone(), source, ast),
-            Err(err) => Entry::from_parse_error(id, label.clone(), source, err.clone()),
+        let execution = match parse_expression(&source) {
+            Ok(ast) => self.save_parsed_entry(label, source, ast),
+            Err(err) => self.save_parse_error(label, source, err),
         };
 
-        self.entries.insert(id, entry);
-        self.rebuild_dependency_graph();
-        self.recompute_affected(&id);
-
-        self.state_result(&id)
+        match execution.state {
+            EntryState::Value(_) => Ok(execution.state),
+            EntryState::Error(err) => Err(err),
+        }
     }
 
-    pub fn append_expr(&mut self, source: impl Into<String>) -> (String, EntryState) {
-        let id = self.id_generator.next();
-        let label = self.allocate_result_label();
-        self.labels.insert(label.clone(), id);
-        let _ = self.set_expr(label.clone(), source);
-        let state = self.get(&label).cloned().unwrap_or_else(|| {
-            EntryState::Error(DagcalError::Eval(EvalError::UnknownReference(
-                label.clone(),
-            )))
-        });
-
-        (label, state)
-    }
-
-    pub fn remove_expr(&mut self, label: &str) -> Option<Entry> {
-        let id = self.labels.get(label).copied()?;
+    pub fn remove_entry(&mut self, label: &str) -> Option<Entry> {
+        let label = EntryLabel::parse(label).ok()?;
+        let id = self.labels.get(&label).copied()?;
         let affected = self.collect_affected(id);
-        self.labels.remove(label);
+        self.labels.remove(&label);
         let removed = self.entries.remove(&id);
         if removed.is_some() {
             self.rebuild_dependency_graph();
@@ -157,7 +172,8 @@ impl Engine {
     }
 
     pub fn entry(&self, label: &str) -> Option<&Entry> {
-        self.labels.get(label).and_then(|id| self.entries.get(id))
+        let label = EntryLabel::parse(label).ok()?;
+        self.entry_for_label(&label)
     }
 
     /// Returns a stored expression by its internal ID.
@@ -165,10 +181,8 @@ impl Engine {
         self.entries.get(&id)
     }
 
-    pub fn entries(&self) -> impl Iterator<Item = (&str, &Entry)> {
-        self.entries
-            .values()
-            .map(|entry| (entry.label.as_str(), entry))
+    pub fn entries(&self) -> impl Iterator<Item = (&EntryLabel, &Entry)> {
+        self.entries.values().map(|entry| (&entry.label, entry))
     }
 
     pub fn cycle_diagnostics(&self) -> CycleDiagnostics {
@@ -187,7 +201,7 @@ impl Engine {
 
     pub fn eval_once(&self, source: &str) -> Result<f64, DagcalError> {
         let ast = parse_expression(source)?;
-        let mut resolve = |name: &str| self.resolve_reference(name);
+        let mut resolve = |name: &EntryLabel| self.resolve_reference(name);
         eval_expr(&ast, &self.functions, &mut resolve).map_err(DagcalError::Eval)
     }
 
@@ -196,13 +210,44 @@ impl Engine {
         self.recompute_ids(ids);
     }
 
-    fn allocate_result_label(&mut self) -> String {
+    fn allocate_result_label(&mut self) -> EntryLabel {
         loop {
-            let label = format!("${}", self.next_result_index);
+            let label = EntryLabel::result(self.next_result_index);
             self.next_result_index += 1;
             if !self.labels.contains_key(&label) {
                 return label;
             }
+        }
+    }
+
+    fn save_parsed_entry(&mut self, label: EntryLabel, source: String, ast: Expr) -> Execution {
+        let id = self.resolve_or_create_id(&label);
+        let entry = Entry::from_parsed(id, label.clone(), source, ast);
+        self.entries.insert(id, entry);
+        self.rebuild_dependency_graph();
+        self.recompute_affected(&id);
+
+        Execution {
+            label: Some(label),
+            state: self.entries[&id].state.clone(),
+        }
+    }
+
+    fn save_parse_error(
+        &mut self,
+        label: EntryLabel,
+        source: String,
+        err: DagcalError,
+    ) -> Execution {
+        let id = self.resolve_or_create_id(&label);
+        let entry = Entry::from_parse_error(id, label.clone(), source, err);
+        self.entries.insert(id, entry);
+        self.rebuild_dependency_graph();
+        self.recompute_affected(&id);
+
+        Execution {
+            label: Some(label),
+            state: self.entries[&id].state.clone(),
         }
     }
 
@@ -220,7 +265,7 @@ impl Engine {
         for id in ids.intersection(&cycle_nodes) {
             if let Some(entry) = self.entries.get_mut(id) {
                 entry.state = EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(
-                    entry.label.clone(),
+                    entry.label.to_string(),
                 )));
             }
         }
@@ -259,7 +304,7 @@ impl Engine {
             return entry.state.clone();
         };
 
-        let mut resolve = |name: &str| self.resolve_reference(name);
+        let mut resolve = |name: &EntryLabel| self.resolve_reference(name);
         let result = eval_expr(ast, &self.functions, &mut resolve);
 
         match result {
@@ -268,17 +313,24 @@ impl Engine {
         }
     }
 
-    fn resolve_reference(&self, name: &str) -> Result<f64, EvalError> {
-        if let Some(entry) = self.entry(name) {
+    fn resolve_reference(&self, name: &EntryLabel) -> Result<f64, EvalError> {
+        if let Some(entry) = self.entry_for_label(name) {
             match &entry.state {
                 EntryState::Value(value) => Ok(*value),
                 EntryState::Error(_) => Err(EvalError::DependencyError(name.to_string())),
             }
-        } else if let Some(value) = self.constants.get(name) {
+        } else if let Some(value) = name
+            .constant_name()
+            .and_then(|constant| self.constants.get(constant))
+        {
             Ok(*value)
         } else {
             Err(EvalError::UnknownReference(name.to_string()))
         }
+    }
+
+    fn entry_for_label(&self, label: &EntryLabel) -> Option<&Entry> {
+        self.labels.get(label).and_then(|id| self.entries.get(id))
     }
 
     fn rebuild_dependency_graph(&mut self) {
@@ -294,30 +346,23 @@ impl Engine {
             }));
     }
 
-    fn state_result(&self, id: &ExpressionId) -> Result<(), DagcalError> {
-        match &self.entries[id].state {
-            EntryState::Value(_) => Ok(()),
-            EntryState::Error(err) => Err(err.clone()),
-        }
-    }
-
-    fn resolve_or_create_id(&mut self, label: &str) -> ExpressionId {
+    fn resolve_or_create_id(&mut self, label: &EntryLabel) -> ExpressionId {
         if let Some(id) = self.labels.get(label) {
             return *id;
         }
 
         let id = self.id_generator.next();
-        if let Some(index) = parse_result_index(label) {
+        if let Some(index) = label.result_index() {
             self.reserve_result_label_through(index);
         }
-        self.labels.insert(label.to_string(), id);
+        self.labels.insert(label.clone(), id);
         id
     }
 
     fn label_for_id(&self, id: ExpressionId) -> String {
         self.entries
             .get(&id)
-            .map(|entry| entry.label.clone())
+            .map(|entry| entry.label.to_string())
             .unwrap_or_else(|| id.to_string())
     }
 
@@ -330,8 +375,22 @@ impl Engine {
     }
 }
 
-fn parse_result_index(label: &str) -> Option<usize> {
-    label.strip_prefix('$')?.parse().ok()
+#[derive(Debug, Clone, PartialEq)]
+pub struct Execution {
+    pub label: Option<EntryLabel>,
+    pub state: EntryState,
+}
+
+fn definition_source(input: &str, name: &EntryLabel) -> String {
+    let Some((left, right)) = input.split_once('=') else {
+        return input.trim().to_string();
+    };
+
+    if left.trim() == name.to_string() {
+        right.trim().to_string()
+    } else {
+        input.trim().to_string()
+    }
 }
 
 #[cfg(test)]
@@ -352,16 +411,24 @@ mod tests {
         }
     }
 
+    fn execution_label(execution: &Execution) -> String {
+        execution
+            .label
+            .as_ref()
+            .expect("expected saved execution label")
+            .to_string()
+    }
+
     #[test]
     fn updates_dependents_when_source_changes() {
         let mut engine = Engine::new();
 
-        engine.set_expr("a", "1 + 2").unwrap();
-        engine.set_expr("b", "a * 2").unwrap();
-        engine.set_expr("c", "b + 1").unwrap();
+        engine.set_entry("a", "1 + 2").unwrap();
+        engine.set_entry("b", "a * 2").unwrap();
+        engine.set_entry("c", "b + 1").unwrap();
         assert_value(&engine, "c", 7.0);
 
-        engine.set_expr("a", "10").unwrap();
+        engine.set_entry("a", "10").unwrap();
         assert_value(&engine, "b", 20.0);
         assert_value(&engine, "c", 21.0);
     }
@@ -370,8 +437,8 @@ mod tests {
     fn user_entries_override_constants() {
         let mut engine = Engine::new();
 
-        engine.set_expr("pi", "3").unwrap();
-        engine.set_expr("x", "pi + 1").unwrap();
+        engine.set_entry("pi", "3").unwrap();
+        engine.set_entry("x", "pi + 1").unwrap();
 
         assert_value(&engine, "x", 4.0);
     }
@@ -380,11 +447,11 @@ mod tests {
     fn removing_entry_recomputes_dependents_as_errors() {
         let mut engine = Engine::new();
 
-        engine.set_expr("a", "2").unwrap();
-        engine.set_expr("b", "a + 3").unwrap();
+        engine.set_entry("a", "2").unwrap();
+        engine.set_entry("b", "a + 3").unwrap();
         assert_value(&engine, "b", 5.0);
 
-        engine.remove_expr("a");
+        engine.remove_entry("a");
 
         assert_eval_error(
             &engine,
@@ -397,11 +464,11 @@ mod tests {
     fn removing_shadowing_entry_reveals_constant_to_dependents() {
         let mut engine = Engine::new();
 
-        engine.set_expr("pi", "3").unwrap();
-        engine.set_expr("x", "pi + 1").unwrap();
+        engine.set_entry("pi", "3").unwrap();
+        engine.set_entry("x", "pi + 1").unwrap();
         assert_value(&engine, "x", 4.0);
 
-        engine.remove_expr("pi");
+        engine.remove_entry("pi");
 
         assert_value(&engine, "x", std::f64::consts::PI + 1.0);
     }
@@ -410,9 +477,9 @@ mod tests {
     fn parse_errors_propagate_and_recover_after_edit() {
         let mut engine = Engine::new();
 
-        engine.set_expr("a", "1").unwrap();
-        engine.set_expr("b", "a + 2").unwrap();
-        assert!(engine.set_expr("a", "1 +").is_err());
+        engine.set_entry("a", "1").unwrap();
+        engine.set_entry("b", "a + 2").unwrap();
+        assert!(engine.set_entry("a", "1 +").is_err());
 
         assert_eval_error(
             &engine,
@@ -420,7 +487,7 @@ mod tests {
             |err| matches!(err, EvalError::DependencyError(name) if name == "a"),
         );
 
-        engine.set_expr("a", "10").unwrap();
+        engine.set_entry("a", "10").unwrap();
         assert_value(&engine, "b", 12.0);
     }
 
@@ -428,12 +495,12 @@ mod tests {
     fn changing_dependencies_drops_old_reverse_dependency() {
         let mut engine = Engine::new();
 
-        engine.set_expr("a", "1").unwrap();
-        engine.set_expr("b", "a + 1").unwrap();
+        engine.set_entry("a", "1").unwrap();
+        engine.set_entry("b", "a + 1").unwrap();
         assert_value(&engine, "b", 2.0);
 
-        engine.set_expr("b", "100").unwrap();
-        engine.set_expr("a", "10").unwrap();
+        engine.set_entry("b", "100").unwrap();
+        engine.set_entry("a", "10").unwrap();
 
         assert_value(&engine, "b", 100.0);
     }
@@ -442,14 +509,14 @@ mod tests {
     fn recomputes_branching_graph_through_errors_and_recovery() {
         let mut engine = Engine::new();
 
-        engine.set_expr("price", "10").unwrap();
-        engine.set_expr("quantity", "3").unwrap();
-        engine.set_expr("discount", "2").unwrap();
-        engine.set_expr("gross", "price * quantity").unwrap();
-        engine.set_expr("net", "gross - discount").unwrap();
-        engine.set_expr("fee", "price / (quantity - 1)").unwrap();
+        engine.set_entry("price", "10").unwrap();
+        engine.set_entry("quantity", "3").unwrap();
+        engine.set_entry("discount", "2").unwrap();
+        engine.set_entry("gross", "price * quantity").unwrap();
+        engine.set_entry("net", "gross - discount").unwrap();
+        engine.set_entry("fee", "price / (quantity - 1)").unwrap();
         engine
-            .set_expr("summary", "net + fee + sin(pi / 2)")
+            .set_entry("summary", "net + fee + sin(pi / 2)")
             .unwrap();
 
         assert_value(&engine, "gross", 30.0);
@@ -457,14 +524,14 @@ mod tests {
         assert_value(&engine, "fee", 5.0);
         assert_value(&engine, "summary", 34.0);
 
-        engine.set_expr("price", "20").unwrap();
+        engine.set_entry("price", "20").unwrap();
 
         assert_value(&engine, "gross", 60.0);
         assert_value(&engine, "net", 58.0);
         assert_value(&engine, "fee", 10.0);
         assert_value(&engine, "summary", 69.0);
 
-        engine.remove_expr("discount");
+        engine.remove_entry("discount");
 
         assert_value(&engine, "gross", 60.0);
         assert_value(&engine, "fee", 10.0);
@@ -479,12 +546,12 @@ mod tests {
             |err| matches!(err, EvalError::DependencyError(name) if name == "net"),
         );
 
-        engine.set_expr("discount", "8").unwrap();
+        engine.set_entry("discount", "8").unwrap();
 
         assert_value(&engine, "net", 52.0);
         assert_value(&engine, "summary", 63.0);
 
-        engine.set_expr("quantity", "1").unwrap();
+        engine.set_entry("quantity", "1").unwrap();
 
         assert_value(&engine, "gross", 20.0);
         assert_value(&engine, "net", 12.0);
@@ -497,7 +564,7 @@ mod tests {
             |err| matches!(err, EvalError::DependencyError(name) if name == "fee"),
         );
 
-        engine.set_expr("quantity", "4").unwrap();
+        engine.set_entry("quantity", "4").unwrap();
 
         assert_value(&engine, "gross", 80.0);
         assert_value(&engine, "net", 72.0);
@@ -509,8 +576,8 @@ mod tests {
     fn dependency_errors_propagate() {
         let mut engine = Engine::new();
 
-        assert!(engine.set_expr("a", "missing + 1").is_err());
-        assert!(engine.set_expr("b", "a * 2").is_err());
+        assert!(engine.set_entry("a", "missing + 1").is_err());
+        assert!(engine.set_entry("b", "a * 2").is_err());
 
         assert!(matches!(
             engine.get("b"),
@@ -524,8 +591,8 @@ mod tests {
     fn detects_cycles() {
         let mut engine = Engine::new();
 
-        assert!(engine.set_expr("a", "b + 1").is_err());
-        assert!(engine.set_expr("b", "a + 1").is_err());
+        assert!(engine.set_entry("a", "b + 1").is_err());
+        assert!(engine.set_entry("b", "a + 1").is_err());
 
         assert!(matches!(
             engine.get("a"),
@@ -539,7 +606,7 @@ mod tests {
     fn self_reference_is_cycle() {
         let mut engine = Engine::new();
 
-        assert!(engine.set_expr("a", "a + 1").is_err());
+        assert!(engine.set_entry("a", "a + 1").is_err());
 
         assert_eval_error(
             &engine,
@@ -557,11 +624,11 @@ mod tests {
     fn reports_cycle_nodes_and_all_dependents() {
         let mut engine = Engine::new();
 
-        assert!(engine.set_expr("a", "b + 1").is_err());
-        assert!(engine.set_expr("b", "a + 1").is_err());
-        assert!(engine.set_expr("c", "a + 1").is_err());
-        assert!(engine.set_expr("d", "c + 1").is_err());
-        engine.set_expr("ok", "10").unwrap();
+        assert!(engine.set_entry("a", "b + 1").is_err());
+        assert!(engine.set_entry("b", "a + 1").is_err());
+        assert!(engine.set_entry("c", "a + 1").is_err());
+        assert!(engine.set_entry("d", "c + 1").is_err());
+        engine.set_entry("ok", "10").unwrap();
 
         let diagnostics = engine.cycle_diagnostics();
 
@@ -594,11 +661,11 @@ mod tests {
     fn reports_multiple_independent_cycles() {
         let mut engine = Engine::new();
 
-        assert!(engine.set_expr("a", "b + 1").is_err());
-        assert!(engine.set_expr("b", "a + 1").is_err());
-        assert!(engine.set_expr("x", "y + 1").is_err());
-        assert!(engine.set_expr("y", "x + 1").is_err());
-        assert!(engine.set_expr("z", "x + a").is_err());
+        assert!(engine.set_entry("a", "b + 1").is_err());
+        assert!(engine.set_entry("b", "a + 1").is_err());
+        assert!(engine.set_entry("x", "y + 1").is_err());
+        assert!(engine.set_entry("y", "x + 1").is_err());
+        assert!(engine.set_entry("z", "x + a").is_err());
 
         let diagnostics = engine.cycle_diagnostics();
 
@@ -628,12 +695,12 @@ mod tests {
     fn clearing_cycle_clears_diagnostics_and_recomputes_dependents() {
         let mut engine = Engine::new();
 
-        assert!(engine.set_expr("a", "b + 1").is_err());
-        assert!(engine.set_expr("b", "a + 1").is_err());
-        assert!(engine.set_expr("c", "a + 1").is_err());
+        assert!(engine.set_entry("a", "b + 1").is_err());
+        assert!(engine.set_entry("b", "a + 1").is_err());
+        assert!(engine.set_entry("c", "a + 1").is_err());
         assert!(!engine.cycle_diagnostics().cycle_nodes.is_empty());
 
-        engine.set_expr("a", "1").unwrap();
+        engine.set_entry("a", "1").unwrap();
 
         let diagnostics = engine.cycle_diagnostics();
         assert!(diagnostics.cycles.is_empty());
@@ -647,12 +714,12 @@ mod tests {
     fn recomputes_acyclic_entries_in_dependency_order_when_cycles_exist() {
         let mut engine = Engine::new();
 
-        engine.set_expr("z", "1").unwrap();
-        engine.set_expr("a", "z + 1").unwrap();
-        assert!(engine.set_expr("cycle_left", "cycle_right + 1").is_err());
-        assert!(engine.set_expr("cycle_right", "cycle_left + 1").is_err());
+        engine.set_entry("z", "1").unwrap();
+        engine.set_entry("a", "z + 1").unwrap();
+        assert!(engine.set_entry("cycle_left", "cycle_right + 1").is_err());
+        assert!(engine.set_entry("cycle_right", "cycle_left + 1").is_err());
 
-        engine.set_expr("z", "10").unwrap();
+        engine.set_entry("z", "10").unwrap();
 
         assert_value(&engine, "z", 10.0);
         assert_value(&engine, "a", 11.0);
@@ -669,16 +736,45 @@ mod tests {
     }
 
     #[test]
+    fn execute_defines_named_entries_and_appends_expressions() {
+        let mut engine = Engine::new();
+
+        let subtotal = engine.execute("subtotal = 100");
+        let taxed = engine.execute("subtotal * 1.1");
+
+        assert_eq!(execution_label(&subtotal), "subtotal");
+        assert_eq!(subtotal.state, EntryState::Value(100.0));
+        assert_eq!(execution_label(&taxed), "$1");
+        assert_eq!(taxed.state, EntryState::Value(110.00000000000001));
+        assert_eq!(engine.entry("subtotal").unwrap().source, "100");
+        assert_eq!(engine.entry("$1").unwrap().source, "subtotal * 1.1");
+    }
+
+    #[test]
+    fn execute_rejects_result_label_definitions_without_saving() {
+        let mut engine = Engine::new();
+
+        let execution = engine.execute("$1 = 100");
+
+        assert!(execution.label.is_none());
+        assert!(matches!(
+            execution.state,
+            EntryState::Error(DagcalError::Parse(_))
+        ));
+        assert!(engine.entry("$1").is_none());
+    }
+
+    #[test]
     fn appends_numbered_results_and_references_them_with_dollar_syntax() {
         let mut engine = Engine::new();
 
-        let (first, first_state) = engine.append_expr("1 + 2");
-        let (second, second_state) = engine.append_expr("$1 * 10");
+        let first = engine.execute("1 + 2");
+        let second = engine.execute("$1 * 10");
 
-        assert_eq!(first, "$1");
-        assert_eq!(second, "$2");
-        assert_eq!(first_state, EntryState::Value(3.0));
-        assert_eq!(second_state, EntryState::Value(30.0));
+        assert_eq!(execution_label(&first), "$1");
+        assert_eq!(execution_label(&second), "$2");
+        assert_eq!(first.state, EntryState::Value(3.0));
+        assert_eq!(second.state, EntryState::Value(30.0));
         assert_value(&engine, "$2", 30.0);
     }
 
@@ -686,11 +782,11 @@ mod tests {
     fn editing_numbered_result_updates_dollar_dependents() {
         let mut engine = Engine::new();
 
-        engine.append_expr("2");
-        engine.append_expr("$1 + 3");
+        engine.execute("2");
+        engine.execute("$1 + 3");
         assert_value(&engine, "$2", 5.0);
 
-        engine.set_expr("$1", "10").unwrap();
+        engine.set_entry("$1", "10").unwrap();
 
         assert_value(&engine, "$2", 13.0);
     }
@@ -699,17 +795,17 @@ mod tests {
     fn numbered_results_recompute_branching_graph_through_removal_and_reuse() {
         let mut engine = Engine::new();
 
-        let (first, _) = engine.append_expr("2");
-        let (second, _) = engine.append_expr("$1 + 3");
-        let (third, _) = engine.append_expr("$1 * $2");
-        let (fourth, _) = engine.append_expr("$2 + $3 + sin(pi / 2)");
-        let (fifth, _) = engine.append_expr("$4 / ($2 - 5)");
+        let first = engine.execute("2");
+        let second = engine.execute("$1 + 3");
+        let third = engine.execute("$1 * $2");
+        let fourth = engine.execute("$2 + $3 + sin(pi / 2)");
+        let fifth = engine.execute("$4 / ($2 - 5)");
 
-        assert_eq!(first, "$1");
-        assert_eq!(second, "$2");
-        assert_eq!(third, "$3");
-        assert_eq!(fourth, "$4");
-        assert_eq!(fifth, "$5");
+        assert_eq!(execution_label(&first), "$1");
+        assert_eq!(execution_label(&second), "$2");
+        assert_eq!(execution_label(&third), "$3");
+        assert_eq!(execution_label(&fourth), "$4");
+        assert_eq!(execution_label(&fifth), "$5");
         assert_value(&engine, "$2", 5.0);
         assert_value(&engine, "$3", 10.0);
         assert_value(&engine, "$4", 16.0);
@@ -717,14 +813,14 @@ mod tests {
             matches!(err, EvalError::DivisionByZero)
         });
 
-        engine.set_expr("$1", "4").unwrap();
+        engine.set_entry("$1", "4").unwrap();
 
         assert_value(&engine, "$2", 7.0);
         assert_value(&engine, "$3", 28.0);
         assert_value(&engine, "$4", 36.0);
         assert_value(&engine, "$5", 18.0);
 
-        engine.remove_expr("$2");
+        engine.remove_entry("$2");
 
         assert_value(&engine, "$1", 4.0);
         assert_eval_error(
@@ -743,17 +839,17 @@ mod tests {
             |err| matches!(err, EvalError::DependencyError(name) if name == "$4"),
         );
 
-        engine.set_expr("$2", "$1 + 6").unwrap();
+        engine.set_entry("$2", "$1 + 6").unwrap();
 
         assert_value(&engine, "$2", 10.0);
         assert_value(&engine, "$3", 40.0);
         assert_value(&engine, "$4", 51.0);
         assert_value(&engine, "$5", 51.0 / 5.0);
 
-        let (sixth, sixth_state) = engine.append_expr("$5 + $3");
+        let sixth = engine.execute("$5 + $3");
 
-        assert_eq!(sixth, "$6");
-        assert_eq!(sixth_state, EntryState::Value(50.2));
+        assert_eq!(execution_label(&sixth), "$6");
+        assert_eq!(sixth.state, EntryState::Value(50.2));
         assert_value(&engine, "$6", 50.2);
     }
 
@@ -761,44 +857,45 @@ mod tests {
     fn appending_skips_existing_numbered_results() {
         let mut engine = Engine::new();
 
-        engine.set_expr("$1", "100").unwrap();
-        let (id, state) = engine.append_expr("$1 + 1");
+        engine.set_entry("$1", "100").unwrap();
+        let execution = engine.execute("$1 + 1");
 
-        assert_eq!(id, "$2");
-        assert_eq!(state, EntryState::Value(101.0));
+        assert_eq!(execution_label(&execution), "$2");
+        assert_eq!(execution.state, EntryState::Value(101.0));
     }
 
     #[test]
     fn explicit_numbered_result_reserves_sequential_expression_id() {
         let mut engine = Engine::new();
 
-        engine.set_expr("$5", "100").unwrap();
-        let (id, state) = engine.append_expr("$5 + 1");
+        engine.set_entry("$5", "100").unwrap();
+        let execution = engine.execute("$5 + 1");
 
-        assert_eq!(id, "$6");
-        assert_eq!(state, EntryState::Value(101.0));
+        assert_eq!(execution_label(&execution), "$6");
+        assert_eq!(execution.state, EntryState::Value(101.0));
     }
 
     #[test]
     fn exposes_entries_by_internal_expression_id() {
         let mut engine = Engine::new();
 
-        let (label, _) = engine.append_expr("40 + 2");
+        let execution = engine.execute("40 + 2");
+        let label = execution_label(&execution);
         let entry = engine.entry(&label).unwrap();
         let id = entry.id;
 
         assert_eq!(engine.get_by_id(id), Some(&EntryState::Value(42.0)));
-        assert_eq!(engine.entry_by_id(id).unwrap().label, "$1");
+        assert_eq!(engine.entry_by_id(id).unwrap().label.to_string(), "$1");
     }
 
     #[test]
     fn named_labels_resolve_to_internal_expression_ids() {
         let mut engine = Engine::new();
 
-        engine.set_expr("subtotal", "100").unwrap();
+        engine.set_entry("subtotal", "100").unwrap();
         let id = engine.entry("subtotal").unwrap().id;
-        engine.set_expr("taxed", "subtotal * 1.1").unwrap();
-        engine.set_expr("subtotal", "200").unwrap();
+        engine.set_entry("taxed", "subtotal * 1.1").unwrap();
+        engine.set_entry("subtotal", "200").unwrap();
 
         assert_eq!(engine.entry("subtotal").unwrap().id, id);
         assert_value(&engine, "taxed", 220.00000000000003);
@@ -808,8 +905,8 @@ mod tests {
     fn exposes_entries_for_read_only_listing() {
         let mut engine = Engine::new();
 
-        engine.set_expr("subtotal", "100").unwrap();
-        engine.append_expr("subtotal * 1.1");
+        engine.set_entry("subtotal", "100").unwrap();
+        engine.execute("subtotal * 1.1");
 
         let mut entries = engine
             .entries()
