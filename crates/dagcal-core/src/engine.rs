@@ -931,4 +931,49 @@ mod tests {
         assert_eq!(entries[1].1, "100");
         assert_eq!(entries[1].2, EntryState::Value(100.0));
     }
+
+    #[test]
+    fn eval_once_can_reference_registered_entries() {
+        let mut engine = Engine::new();
+
+        engine.set_entry("subtotal", "40").unwrap();
+
+        assert_eq!(engine.eval_once("subtotal * 1.1").unwrap(), 44.0);
+    }
+
+    #[test]
+    fn registering_function_recomputes_existing_entries() {
+        let mut engine = Engine::new();
+
+        assert!(engine.set_entry("x", "triple(14)").is_err());
+        engine.register_fixed_function("triple", 1, |args| Ok(args[0] * 3.0));
+
+        assert_eq!(engine.get("x"), Some(&EntryState::Value(42.0)));
+    }
+
+    #[test]
+    fn registering_variadic_function_recomputes_existing_entries() {
+        let mut engine = Engine::new();
+
+        assert!(engine.set_entry("x", "product(2, 3, 4)").is_err());
+        engine.register_variadic_function("product", 0, |args| Ok(args.iter().product()));
+
+        assert_eq!(engine.get("x"), Some(&EntryState::Value(24.0)));
+    }
+
+    #[test]
+    fn setting_constant_recomputes_existing_entries() {
+        let mut engine = Engine::new();
+
+        engine.set_entry("radius", "2").unwrap();
+        engine
+            .set_entry("area", "tau * radius ^ 2 / 2")
+            .unwrap_err();
+        engine.set_constant("tau", std::f64::consts::TAU);
+
+        assert_eq!(
+            engine.get("area"),
+            Some(&EntryState::Value(std::f64::consts::TAU * 2.0))
+        );
+    }
 }

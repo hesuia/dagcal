@@ -203,6 +203,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_decimal_and_scientific_notation() {
+        let expr = parse_expression(".5 + 1e3 + 2.5E-1 + 1.").unwrap();
+
+        assert_eq!(
+            expr,
+            Expr::Binary {
+                lhs: Box::new(Expr::Binary {
+                    lhs: Box::new(Expr::Binary {
+                        lhs: Box::new(Expr::Number(0.5)),
+                        op: BinaryOp::Add,
+                        rhs: Box::new(Expr::Number(1000.0)),
+                    }),
+                    op: BinaryOp::Add,
+                    rhs: Box::new(Expr::Number(0.25)),
+                }),
+                op: BinaryOp::Add,
+                rhs: Box::new(Expr::Number(1.0)),
+            }
+        );
+    }
+
+    #[test]
     fn parses_power_as_right_associative() {
         let expr = parse_expression("2 ^ 3 ^ 2").unwrap();
 

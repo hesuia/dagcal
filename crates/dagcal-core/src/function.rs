@@ -182,3 +182,109 @@ fn finite_function_result(name: &str, value: f64) -> Result<f64, EvalError> {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+
+    fn call_standard(name: &str, args: &[f64]) -> Result<f64, EvalError> {
+        FunctionRegistry::standard().get(name).unwrap().call(args)
+    }
+
+    #[test]
+    fn exact_signatures_accept_only_their_arity() {
+        let signature = FunctionSignature::exact(2);
+
+        assert!(!signature.accepts(1));
+        assert!(signature.accepts(2));
+        assert!(!signature.accepts(3));
+        assert_eq!(signature.to_string(), "2 argument(s)");
+    }
+
+    #[test]
+    fn variadic_signatures_accept_minimum_or_more() {
+        let signature = FunctionSignature::variadic(1);
+
+        assert!(!signature.accepts(0));
+        assert!(signature.accepts(1));
+        assert!(signature.accepts(3));
+        assert_eq!(signature.to_string(), "at least 1 argument(s)");
+    }
+
+    #[test]
+    fn registered_functions_store_signature_and_body() {
+        let mut registry = FunctionRegistry::new();
+
+        registry.register("double", FunctionSignature::exact(1), |args| {
+            Ok(args[0] * 2.0)
+        });
+
+        let function = registry.get("double").unwrap();
+        assert_eq!(function.signature(), &FunctionSignature::Exact(1));
+        assert_eq!(function.call(&[21.0]), Ok(42.0));
+        assert!(registry.get("missing").is_none());
+    }
+
+    #[test]
+    fn standard_unary_functions_return_finite_results() {
+        assert_close(
+            call_standard("sin", &[std::f64::consts::FRAC_PI_2]).unwrap(),
+            1.0,
+        );
+        assert_close(call_standard("cos", &[0.0]).unwrap(), 1.0);
+        assert_close(call_standard("ln", &[std::f64::consts::E]).unwrap(), 1.0);
+        assert_close(call_standard("log", &[100.0]).unwrap(), 2.0);
+        assert_close(call_standard("sqrt", &[9.0]).unwrap(), 3.0);
+        assert_close(call_standard("abs", &[-3.5]).unwrap(), 3.5);
+        assert_close(call_standard("floor", &[1.9]).unwrap(), 1.0);
+        assert_close(call_standard("ceil", &[1.1]).unwrap(), 2.0);
+    }
+
+    #[test]
+    fn standard_binary_functions_return_finite_results() {
+        assert_close(
+            call_standard("atan2", &[1.0, 1.0]).unwrap(),
+            std::f64::consts::FRAC_PI_4,
+        );
+        assert_close(call_standard("hypot", &[3.0, 4.0]).unwrap(), 5.0);
+        assert_close(call_standard("pow", &[2.0, 3.0]).unwrap(), 8.0);
+        assert_close(call_standard("logn", &[8.0, 2.0]).unwrap(), 3.0);
+    }
+
+    #[test]
+    fn standard_variadic_functions_handle_empty_and_non_empty_inputs() {
+        assert_close(call_standard("sum", &[]).unwrap(), 0.0);
+        assert_close(call_standard("sum", &[1.0, 2.0, 3.0]).unwrap(), 6.0);
+        assert_close(call_standard("avg", &[2.0, 4.0, 6.0]).unwrap(), 4.0);
+        assert_close(call_standard("min", &[3.0, 1.0, 2.0]).unwrap(), 1.0);
+        assert_close(call_standard("max", &[3.0, 1.0, 2.0]).unwrap(), 3.0);
+    }
+
+    #[test]
+    fn standard_functions_reject_non_finite_results_consistently() {
+        assert!(matches!(
+            call_standard("sqrt", &[-1.0]),
+            Err(EvalError::Math(message))
+                if message == "function `sqrt` produced non-finite result"
+        ));
+        assert!(matches!(
+            call_standard("ln", &[-1.0]),
+            Err(EvalError::Math(message))
+                if message == "function `ln` produced non-finite result"
+        ));
+        assert!(matches!(
+            call_standard("log", &[0.0]),
+            Err(EvalError::Math(message))
+                if message == "function `log` produced non-finite result"
+        ));
+        assert!(matches!(
+            call_standard("acos", &[2.0]),
+            Err(EvalError::Math(message))
+                if message == "function `acos` produced non-finite result"
+        ));
+    }
+}
