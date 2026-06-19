@@ -2,45 +2,39 @@
 
 ## Project Structure & Module Organization
 
-This repository is a Rust workspace for a calculator engine. The root package `dagcal` currently contains a minimal binary entrypoint in [src/main.rs](~/programs/dagcal/src/main.rs). Core logic lives in `crates/dagcal-core/`, which is the main crate contributors should extend.
+`dagcal` is a Rust workspace with a small CLI in `src/main.rs` and the main engine crate in `crates/dagcal-core/`. Most contributor work belongs in `crates/dagcal-core/src/`.
 
-Inside `crates/dagcal-core/src/`:
-- `lib.rs` re-exports the public API
-- `engine.rs` manages expressions, references, and recomputation
-- `parser.rs` and `syntax.pest` define the grammar and AST parsing
-- `eval.rs`, `function.rs`, and `error.rs` cover evaluation, built-ins, and error types
+Key core modules:
+- `lib.rs`: public API exports
+- `engine.rs`: entry lifecycle, dependency tracking, recomputation
+- `parser.rs` and `syntax.pest`: grammar and parsing
+- `eval.rs`, `function.rs`, `error.rs`: evaluation, built-ins, error types
+- `tests/public_api.rs`: integration coverage for the exposed API
 
-Keep new logic near its ownership boundary instead of adding cross-cutting helpers at the root.
+Keep new code close to the module that owns the behavior instead of adding broad helpers at the workspace root.
 
 ## Build, Test, and Development Commands
 
-- `cargo check --workspace`: fast compile check for the whole workspace
-- `cargo test -p dagcal-core`: run the core engine test suite
-- `cargo test --workspace`: run all tests
-- `cargo fmt --all`: format Rust code before review
+Run commands from the repository root:
 
-Run commands from the repository root.
+- `cargo check --workspace`: fast compile check across the CLI and core crate
+- `cargo test --workspace`: run unit and integration tests
+- `cargo test -p dagcal-core`: focus on the core engine during parser/evaluator work
+- `cargo run`: start the REPL locally
+- `cargo fmt --all`: apply standard Rust formatting
 
 ## Coding Style & Naming Conventions
 
-Use standard Rust style: 4-space indentation, `snake_case` for functions/modules, `CamelCase` for types, and small focused modules. Prefer explicit error types over stringly-typed failures. Keep parser changes aligned with `syntax.pest` and the AST in `parser.rs` and `ast.rs`.
+Follow idiomatic Rust: 4-space indentation, `snake_case` for functions/modules/tests, `CamelCase` for types, and concise enums for domain states. Prefer explicit error variants in `error.rs` over string-based failures. When changing parsing behavior, update `syntax.pest`, parser logic, and relevant AST handling together.
 
-Formatting is enforced with `cargo fmt`. No separate linter is configured yet, so keep code idiomatic and warning-free under `cargo check`.
-
-- Avoid unnecessary clones and prefer references when possible. Use `Result<T, E>` for fallible operations and define custom error types in `error.rs` for clarity.
-- For public API functions, document behavior, parameters, and return values with doc comments. For internal functions, focus on clear naming and modularity to convey intent.
+Formatting is done with `cargo fmt`. Keep code warning-free under `cargo check`; if you use Clippy locally, fix useful lints before opening a PR.
 
 ## Testing Guidelines
 
-Tests are currently inline unit tests within the relevant source files. Add tests next to the code they validate. Cover parser precedence, evaluation edge cases, dependency propagation, and recomputation after edits or removals.
-
-Name tests by behavior, for example `removing_entry_recomputes_dependents_as_errors`.
+Add unit tests beside the code they verify and integration tests in `crates/dagcal-core/tests/` for public API behavior. Name tests by observable behavior, for example `removing_entry_recomputes_dependents_as_errors`. Cover parser precedence, dependency propagation, cycle handling, and recovery after edits or removals.
 
 ## Commit & Pull Request Guidelines
 
-The current history uses short imperative commit subjects, for example: `Add dagcal core calculator crate`. Follow that pattern. Keep commits scoped to one logical change when possible.
+Recent history uses short imperative subjects such as `Add public API integration tests` and `Optimize dependency graph analysis`. Follow that pattern and keep each commit scoped to one logical change.
 
-For pull requests, include:
-- a brief summary of the behavioral change
-- test evidence such as `cargo test -p dagcal-core`
-- notes on grammar or public API changes when relevant
+PRs should include a brief behavior summary, the commands you ran (usually `cargo test --workspace`), and notes on grammar or API changes when applicable.
