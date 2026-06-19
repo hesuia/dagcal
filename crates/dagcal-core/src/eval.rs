@@ -1,25 +1,28 @@
-use crate::ast::{BinaryOp, Expr, Reference, UnaryOp};
+use crate::ast::{BinaryOp, ResolvedExpr, UnaryOp};
 use crate::error::EvalError;
 use crate::function::FunctionRegistry;
+use crate::id::ExpressionId;
 
 pub(crate) fn eval_expr(
-    expr: &Expr,
+    expr: &ResolvedExpr,
     functions: &FunctionRegistry,
-    resolve: &mut dyn FnMut(&Reference) -> Result<f64, EvalError>,
+    resolve_entry: &mut dyn FnMut(ExpressionId) -> Result<f64, EvalError>,
+    resolve_constant: &mut dyn FnMut(&str) -> Result<f64, EvalError>,
 ) -> Result<f64, EvalError> {
     match expr {
-        Expr::Number(value) => Ok(*value),
-        Expr::Reference(name) => resolve(name),
-        Expr::Unary { op, rhs } => {
-            let rhs = eval_expr(rhs, functions, resolve)?;
+        ResolvedExpr::Number(value) => Ok(*value),
+        ResolvedExpr::EntryReference(id) => resolve_entry(*id),
+        ResolvedExpr::Constant(name) => resolve_constant(name),
+        ResolvedExpr::Unary { op, rhs } => {
+            let rhs = eval_expr(rhs, functions, resolve_entry, resolve_constant)?;
             match op {
                 UnaryOp::Plus => Ok(rhs),
                 UnaryOp::Minus => Ok(-rhs),
             }
         }
-        Expr::Binary { lhs, op, rhs } => {
-            let lhs = eval_expr(lhs, functions, resolve)?;
-            let rhs = eval_expr(rhs, functions, resolve)?;
+        ResolvedExpr::Binary { lhs, op, rhs } => {
+            let lhs = eval_expr(lhs, functions, resolve_entry, resolve_constant)?;
+            let rhs = eval_expr(rhs, functions, resolve_entry, resolve_constant)?;
             match op {
                 BinaryOp::Add => Ok(lhs + rhs),
                 BinaryOp::Sub => Ok(lhs - rhs),
@@ -41,7 +44,7 @@ pub(crate) fn eval_expr(
                 BinaryOp::Pow => finite_operator_result("power", lhs.powf(rhs)),
             }
         }
-        Expr::Call { name, args } => {
+        ResolvedExpr::Call { name, args } => {
             let function = functions
                 .get(name)
                 .ok_or_else(|| EvalError::UnknownFunction(name.clone()))?;
@@ -55,7 +58,7 @@ pub(crate) fn eval_expr(
 
             let mut evaluated_args = Vec::with_capacity(args.len());
             for arg in args {
-                evaluated_args.push(eval_expr(arg, functions, resolve)?);
+                evaluated_args.push(eval_expr(arg, functions, resolve_entry, resolve_constant)?);
             }
             function.call(&evaluated_args)
         }
@@ -77,8 +80,6 @@ mod tests {
     use super::*;
     use crate::error::DagcalError;
     use crate::function::FunctionSignature;
-    use crate::id::ExpressionId;
-    use crate::parser::parse_expression;
     use std::collections::HashMap;
 
     fn assert_close(actual: f64, expected: f64) {
@@ -86,39 +87,121 @@ mod tests {
     }
 
     fn eval_with_refs(
-        source: &str,
-        refs: &[(&str, f64)],
+        expr: &ResolvedExpr,
+        refs: &[(ExpressionId, f64)],
+        constants: &[(&str, f64)],
         functions: &FunctionRegistry,
     ) -> Result<f64, EvalError> {
-        let expr = parse_expression(source).unwrap();
-        let refs = refs
+        let refs = refs.iter().copied().collect::<HashMap<_, _>>();
+        let constants = constants
             .iter()
-            .map(|(name, value)| (parse_test_reference(name), *value))
+            .map(|(name, value)| ((*name).to_string(), *value))
             .collect::<HashMap<_, _>>();
-        let mut resolve = |reference: &Reference| {
-            refs.get(reference)
+        let mut resolve_entry = |id: ExpressionId| {
+            refs.get(&id)
                 .copied()
-                .ok_or_else(|| EvalError::UnknownReference(reference.display_name()))
+                .ok_or_else(|| EvalError::UnknownReference(format!("${}", id.value())))
+        };
+        let mut resolve_constant = |name: &str| {
+            constants
+                .get(name)
+                .copied()
+                .ok_or_else(|| EvalError::UnknownReference(name.to_string()))
         };
 
-        eval_expr(&expr, functions, &mut resolve)
-    }
-
-    fn parse_test_reference(input: &str) -> Reference {
-        if let Some(digits) = input.strip_prefix('$') {
-            return Reference::Id(ExpressionId::new(digits.parse().unwrap()));
-        }
-
-        Reference::Name(input.to_string())
+        eval_expr(expr, functions, &mut resolve_entry, &mut resolve_constant)
     }
 
     fn eval_standard(source: &str) -> Result<f64, EvalError> {
         let functions = FunctionRegistry::standard();
+        let expr = test_expr(source);
         eval_with_refs(
-            source,
+            &expr,
+            &[],
             &[("pi", std::f64::consts::PI), ("e", std::f64::consts::E)],
             &functions,
         )
+    }
+
+    fn test_expr(source: &str) -> ResolvedExpr {
+        match source {
+            "1 + 2 * 3" => ResolvedExpr::Binary {
+                lhs: Box::new(ResolvedExpr::Number(1.0)),
+                op: BinaryOp::Add,
+                rhs: Box::new(ResolvedExpr::Binary {
+                    lhs: Box::new(ResolvedExpr::Number(2.0)),
+                    op: BinaryOp::Mul,
+                    rhs: Box::new(ResolvedExpr::Number(3.0)),
+                }),
+            },
+            "(1 + 2) * 3" => ResolvedExpr::Binary {
+                lhs: Box::new(ResolvedExpr::Binary {
+                    lhs: Box::new(ResolvedExpr::Number(1.0)),
+                    op: BinaryOp::Add,
+                    rhs: Box::new(ResolvedExpr::Number(2.0)),
+                }),
+                op: BinaryOp::Mul,
+                rhs: Box::new(ResolvedExpr::Number(3.0)),
+            },
+            "10 % 4" => ResolvedExpr::Binary {
+                lhs: Box::new(ResolvedExpr::Number(10.0)),
+                op: BinaryOp::Rem,
+                rhs: Box::new(ResolvedExpr::Number(4.0)),
+            },
+            "2 ^ 3 ^ 2" => ResolvedExpr::Binary {
+                lhs: Box::new(ResolvedExpr::Number(2.0)),
+                op: BinaryOp::Pow,
+                rhs: Box::new(ResolvedExpr::Binary {
+                    lhs: Box::new(ResolvedExpr::Number(3.0)),
+                    op: BinaryOp::Pow,
+                    rhs: Box::new(ResolvedExpr::Number(2.0)),
+                }),
+            },
+            "-2 ^ 2" => ResolvedExpr::Unary {
+                op: UnaryOp::Minus,
+                rhs: Box::new(ResolvedExpr::Binary {
+                    lhs: Box::new(ResolvedExpr::Number(2.0)),
+                    op: BinaryOp::Pow,
+                    rhs: Box::new(ResolvedExpr::Number(2.0)),
+                }),
+            },
+            "+5 - -2" => ResolvedExpr::Binary {
+                lhs: Box::new(ResolvedExpr::Unary {
+                    op: UnaryOp::Plus,
+                    rhs: Box::new(ResolvedExpr::Number(5.0)),
+                }),
+                op: BinaryOp::Sub,
+                rhs: Box::new(ResolvedExpr::Unary {
+                    op: UnaryOp::Minus,
+                    rhs: Box::new(ResolvedExpr::Number(2.0)),
+                }),
+            },
+            "1 / 0" => ResolvedExpr::Binary {
+                lhs: Box::new(ResolvedExpr::Number(1.0)),
+                op: BinaryOp::Div,
+                rhs: Box::new(ResolvedExpr::Number(0.0)),
+            },
+            "1 % 0" => ResolvedExpr::Binary {
+                lhs: Box::new(ResolvedExpr::Number(1.0)),
+                op: BinaryOp::Rem,
+                rhs: Box::new(ResolvedExpr::Number(0.0)),
+            },
+            "missing + 1" => ResolvedExpr::Binary {
+                lhs: Box::new(ResolvedExpr::Constant("missing".to_string())),
+                op: BinaryOp::Add,
+                rhs: Box::new(ResolvedExpr::Number(1.0)),
+            },
+            "nope(1)" => ResolvedExpr::Call {
+                name: "nope".to_string(),
+                args: vec![ResolvedExpr::Number(1.0)],
+            },
+            "1e308 ^ 2" => ResolvedExpr::Binary {
+                lhs: Box::new(ResolvedExpr::Number(1e308)),
+                op: BinaryOp::Pow,
+                rhs: Box::new(ResolvedExpr::Number(2.0)),
+            },
+            _ => panic!("missing test expression fixture for {source}"),
+        }
     }
 
     #[test]
@@ -139,7 +222,23 @@ mod tests {
         });
 
         assert_close(
-            eval_with_refs("weighted(x + 1, y)", &[("x", 2.0), ("y", 4.0)], &functions).unwrap(),
+            eval_with_refs(
+                &ResolvedExpr::Call {
+                    name: "weighted".to_string(),
+                    args: vec![
+                        ResolvedExpr::Binary {
+                            lhs: Box::new(ResolvedExpr::EntryReference(ExpressionId::new(1))),
+                            op: BinaryOp::Add,
+                            rhs: Box::new(ResolvedExpr::Number(1.0)),
+                        },
+                        ResolvedExpr::EntryReference(ExpressionId::new(2)),
+                    ],
+                },
+                &[(ExpressionId::new(1), 2.0), (ExpressionId::new(2), 4.0)],
+                &[],
+                &functions,
+            )
+            .unwrap(),
             43.0,
         );
     }
@@ -163,7 +262,15 @@ mod tests {
         let functions = FunctionRegistry::standard();
 
         assert!(matches!(
-            eval_with_refs("sin()", &[], &functions),
+            eval_with_refs(
+                &ResolvedExpr::Call {
+                    name: "sin".to_string(),
+                    args: vec![],
+                },
+                &[],
+                &[],
+                &functions
+            ),
             Err(EvalError::ArityMismatch {
                 name,
                 expected: FunctionSignature::Exact(1),
@@ -171,7 +278,15 @@ mod tests {
             }) if name == "sin"
         ));
         assert!(matches!(
-            eval_with_refs("avg()", &[], &functions),
+            eval_with_refs(
+                &ResolvedExpr::Call {
+                    name: "avg".to_string(),
+                    args: vec![],
+                },
+                &[],
+                &[],
+                &functions
+            ),
             Err(EvalError::ArityMismatch {
                 name,
                 expected: FunctionSignature::Variadic { min: 1 },
@@ -179,7 +294,15 @@ mod tests {
             }) if name == "avg"
         ));
         assert!(matches!(
-            eval_with_refs("sin(missing)", &[], &functions),
+            eval_with_refs(
+                &ResolvedExpr::Call {
+                    name: "sin".to_string(),
+                    args: vec![ResolvedExpr::Constant("missing".to_string())],
+                },
+                &[],
+                &[],
+                &functions
+            ),
             Err(EvalError::UnknownReference(name)) if name == "missing"
         ));
     }
@@ -198,7 +321,16 @@ mod tests {
         let functions = FunctionRegistry::standard();
 
         assert_close(
-            eval_with_refs("$1 + $20", &[("$1", 2.0), ("$20", 5.0)], &functions)?,
+            eval_with_refs(
+                &ResolvedExpr::Binary {
+                    lhs: Box::new(ResolvedExpr::EntryReference(ExpressionId::new(1))),
+                    op: BinaryOp::Add,
+                    rhs: Box::new(ResolvedExpr::EntryReference(ExpressionId::new(20))),
+                },
+                &[(ExpressionId::new(1), 2.0), (ExpressionId::new(20), 5.0)],
+                &[],
+                &functions,
+            )?,
             7.0,
         );
 

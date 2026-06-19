@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, Reference, Statement, UnaryOp};
+use crate::ast::{BinaryOp, ParsedExpr, ParsedReference, ParsedStatement, UnaryOp};
 use crate::error::DagcalError;
 use crate::id::ExpressionId;
 use crate::label::EntryLabel;
@@ -10,7 +10,7 @@ use pest_derive::Parser;
 #[grammar = "syntax.pest"]
 struct DagParser;
 
-pub fn parse_expression(source: &str) -> Result<Expr, DagcalError> {
+pub fn parse_expression(source: &str) -> Result<ParsedExpr, DagcalError> {
     let mut pairs = DagParser::parse(Rule::calculation, source)
         .map_err(|err| DagcalError::Parse(err.to_string()))?;
     let pair = pairs
@@ -23,7 +23,7 @@ pub fn parse_expression(source: &str) -> Result<Expr, DagcalError> {
     build_expr(expr)
 }
 
-pub fn parse_statement(source: &str) -> Result<Statement, DagcalError> {
+pub fn parse_statement(source: &str) -> Result<ParsedStatement, DagcalError> {
     let mut pairs = DagParser::parse(Rule::statement, source)
         .map_err(|err| DagcalError::Parse(err.to_string()))?;
     let pair = pairs
@@ -36,11 +36,11 @@ pub fn parse_statement(source: &str) -> Result<Statement, DagcalError> {
 
     match statement.as_rule() {
         Rule::definition => build_definition(statement),
-        _ => build_expr(statement).map(Statement::Expression),
+        _ => build_expr(statement).map(ParsedStatement::Expression),
     }
 }
 
-fn build_definition(pair: Pair<'_, Rule>) -> Result<Statement, DagcalError> {
+fn build_definition(pair: Pair<'_, Rule>) -> Result<ParsedStatement, DagcalError> {
     let mut inner = pair.into_inner();
     let name = inner
         .next()
@@ -49,13 +49,13 @@ fn build_definition(pair: Pair<'_, Rule>) -> Result<Statement, DagcalError> {
         .next()
         .ok_or_else(|| DagcalError::Parse("expected definition expression".to_string()))?;
 
-    Ok(Statement::Definition {
+    Ok(ParsedStatement::Definition {
         name: EntryLabel::named(name.as_str())?.to_string(),
         expr: build_expr(expr)?,
     })
 }
 
-fn build_expr(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
+fn build_expr(pair: Pair<'_, Rule>) -> Result<ParsedExpr, DagcalError> {
     match pair.as_rule() {
         Rule::expr => build_only_child(pair),
         Rule::add => build_left_assoc(pair),
@@ -67,14 +67,16 @@ fn build_expr(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
         Rule::number => pair
             .as_str()
             .parse::<f64>()
-            .map(Expr::Number)
+            .map(ParsedExpr::Number)
             .map_err(|err| {
                 DagcalError::Parse(format!("invalid number `{}`: {err}", pair.as_str()))
             }),
-        Rule::ident => Ok(Expr::Reference(Reference::Name(pair.as_str().to_string()))),
+        Rule::ident => Ok(ParsedExpr::Reference(ParsedReference::Name(
+            pair.as_str().to_string(),
+        ))),
         Rule::result_ref => {
             let id = parse_result_ref(pair.as_str())?;
-            Ok(Expr::Reference(Reference::Id(id)))
+            Ok(ParsedExpr::Reference(ParsedReference::Id(id)))
         }
         _ => Err(DagcalError::Parse(format!(
             "unexpected parser rule {:?}",
@@ -98,7 +100,7 @@ fn parse_result_ref(input: &str) -> Result<ExpressionId, DagcalError> {
     Ok(ExpressionId::new(value))
 }
 
-fn build_only_child(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
+fn build_only_child(pair: Pair<'_, Rule>) -> Result<ParsedExpr, DagcalError> {
     let child = pair
         .into_inner()
         .next()
@@ -106,7 +108,7 @@ fn build_only_child(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
     build_expr(child)
 }
 
-fn build_left_assoc(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
+fn build_left_assoc(pair: Pair<'_, Rule>) -> Result<ParsedExpr, DagcalError> {
     let mut inner = pair.into_inner();
     let first = inner
         .next()
@@ -117,7 +119,7 @@ fn build_left_assoc(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
         let rhs = inner
             .next()
             .ok_or_else(|| DagcalError::Parse("expected right-hand expression".to_string()))?;
-        expr = Expr::Binary {
+        expr = ParsedExpr::Binary {
             lhs: Box::new(expr),
             op: binary_op(op.as_str())?,
             rhs: Box::new(build_expr(rhs)?),
@@ -127,7 +129,7 @@ fn build_left_assoc(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
     Ok(expr)
 }
 
-fn build_unary(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
+fn build_unary(pair: Pair<'_, Rule>) -> Result<ParsedExpr, DagcalError> {
     let mut ops = Vec::new();
     let mut rhs = None;
 
@@ -140,7 +142,7 @@ fn build_unary(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
 
     let mut expr = rhs.ok_or_else(|| DagcalError::Parse("expected unary operand".to_string()))?;
     for op in ops.into_iter().rev() {
-        expr = Expr::Unary {
+        expr = ParsedExpr::Unary {
             op,
             rhs: Box::new(expr),
         };
@@ -148,7 +150,7 @@ fn build_unary(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
     Ok(expr)
 }
 
-fn build_pow(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
+fn build_pow(pair: Pair<'_, Rule>) -> Result<ParsedExpr, DagcalError> {
     let mut inner = pair.into_inner();
     let lhs = inner
         .next()
@@ -156,7 +158,7 @@ fn build_pow(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
     let mut expr = build_expr(lhs)?;
 
     if let Some(rhs) = inner.next() {
-        expr = Expr::Binary {
+        expr = ParsedExpr::Binary {
             lhs: Box::new(expr),
             op: BinaryOp::Pow,
             rhs: Box::new(build_expr(rhs)?),
@@ -166,7 +168,7 @@ fn build_pow(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
     Ok(expr)
 }
 
-fn build_function_call(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
+fn build_function_call(pair: Pair<'_, Rule>) -> Result<ParsedExpr, DagcalError> {
     let mut inner = pair.into_inner();
     let name = inner
         .next()
@@ -174,7 +176,7 @@ fn build_function_call(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
         .as_str()
         .to_string();
     let args = inner.map(build_expr).collect::<Result<Vec<_>, _>>()?;
-    Ok(Expr::Call { name, args })
+    Ok(ParsedExpr::Call { name, args })
 }
 
 fn unary_op(op: &str) -> Result<UnaryOp, DagcalError> {
@@ -210,13 +212,13 @@ mod tests {
 
         assert_eq!(
             expr,
-            Expr::Binary {
-                lhs: Box::new(Expr::Number(1.0)),
+            ParsedExpr::Binary {
+                lhs: Box::new(ParsedExpr::Number(1.0)),
                 op: BinaryOp::Add,
-                rhs: Box::new(Expr::Binary {
-                    lhs: Box::new(Expr::Number(2.0)),
+                rhs: Box::new(ParsedExpr::Binary {
+                    lhs: Box::new(ParsedExpr::Number(2.0)),
                     op: BinaryOp::Mul,
-                    rhs: Box::new(Expr::Number(3.0)),
+                    rhs: Box::new(ParsedExpr::Number(3.0)),
                 }),
             }
         );
@@ -228,18 +230,18 @@ mod tests {
 
         assert_eq!(
             expr,
-            Expr::Binary {
-                lhs: Box::new(Expr::Binary {
-                    lhs: Box::new(Expr::Binary {
-                        lhs: Box::new(Expr::Number(0.5)),
+            ParsedExpr::Binary {
+                lhs: Box::new(ParsedExpr::Binary {
+                    lhs: Box::new(ParsedExpr::Binary {
+                        lhs: Box::new(ParsedExpr::Number(0.5)),
                         op: BinaryOp::Add,
-                        rhs: Box::new(Expr::Number(1000.0)),
+                        rhs: Box::new(ParsedExpr::Number(1000.0)),
                     }),
                     op: BinaryOp::Add,
-                    rhs: Box::new(Expr::Number(0.25)),
+                    rhs: Box::new(ParsedExpr::Number(0.25)),
                 }),
                 op: BinaryOp::Add,
-                rhs: Box::new(Expr::Number(1.0)),
+                rhs: Box::new(ParsedExpr::Number(1.0)),
             }
         );
     }
@@ -250,13 +252,13 @@ mod tests {
 
         assert_eq!(
             expr,
-            Expr::Binary {
-                lhs: Box::new(Expr::Number(2.0)),
+            ParsedExpr::Binary {
+                lhs: Box::new(ParsedExpr::Number(2.0)),
                 op: BinaryOp::Pow,
-                rhs: Box::new(Expr::Binary {
-                    lhs: Box::new(Expr::Number(3.0)),
+                rhs: Box::new(ParsedExpr::Binary {
+                    lhs: Box::new(ParsedExpr::Number(3.0)),
                     op: BinaryOp::Pow,
-                    rhs: Box::new(Expr::Number(2.0)),
+                    rhs: Box::new(ParsedExpr::Number(2.0)),
                 }),
             }
         );
@@ -269,8 +271,8 @@ mod tests {
         assert_eq!(
             expr.references(),
             BTreeSet::from([
-                Reference::Name("pi".to_string()),
-                Reference::Name("x".to_string())
+                ParsedReference::Name("pi".to_string()),
+                ParsedReference::Name("x".to_string())
             ])
         );
     }
@@ -282,9 +284,9 @@ mod tests {
         assert_eq!(
             expr.references(),
             BTreeSet::from([
-                Reference::Id(ExpressionId::new(1)),
-                Reference::Id(ExpressionId::new(20)),
-                Reference::Name("subtotal".to_string())
+                ParsedReference::Id(ExpressionId::new(1)),
+                ParsedReference::Id(ExpressionId::new(20)),
+                ParsedReference::Name("subtotal".to_string())
             ])
         );
     }
@@ -296,8 +298,8 @@ mod tests {
         assert_eq!(
             expr.references(),
             BTreeSet::from([
-                Reference::Name("x".to_string()),
-                Reference::Name("y".to_string())
+                ParsedReference::Name("x".to_string()),
+                ParsedReference::Name("y".to_string())
             ])
         );
     }
@@ -307,11 +309,11 @@ mod tests {
         let statement = parse_statement("subtotal = 100 + tax").unwrap();
 
         match statement {
-            Statement::Definition { name, expr } => {
+            ParsedStatement::Definition { name, expr } => {
                 assert_eq!(name, "subtotal");
                 assert_eq!(
                     expr.references(),
-                    BTreeSet::from([Reference::Name("tax".to_string())])
+                    BTreeSet::from([ParsedReference::Name("tax".to_string())])
                 );
             }
             other => panic!("expected definition, got {other:?}"),
@@ -323,10 +325,10 @@ mod tests {
         let statement = parse_statement("$1 + 10").unwrap();
 
         match statement {
-            Statement::Expression(expr) => {
+            ParsedStatement::Expression(expr) => {
                 assert_eq!(
                     expr.references(),
-                    BTreeSet::from([Reference::Id(ExpressionId::new(1))])
+                    BTreeSet::from([ParsedReference::Id(ExpressionId::new(1))])
                 );
             }
             other => panic!("expected expression, got {other:?}"),

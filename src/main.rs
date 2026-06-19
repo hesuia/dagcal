@@ -117,16 +117,15 @@ impl Repl {
     }
 
     fn print_entries(&self) {
-        let mut entries = self.engine.entries().collect::<Vec<_>>();
-        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        let entries = self.engine.entries();
 
         if entries.is_empty() {
             println!("no entries");
             return;
         }
 
-        for (label, entry) in entries {
-            print!("{label} = {} => ", entry.source);
+        for entry in entries {
+            print!("{} = {} => ", entry.label, entry.source);
             print_state_value(&entry.state);
         }
     }

@@ -44,7 +44,7 @@ fn user_session_supports_definitions_results_edits_and_recovery() {
     assert_eval_error(
         &engine,
         "$3",
-        |err| matches!(err, EvalError::UnknownReference(name) if name == "tax_rate"),
+        |err| matches!(err, EvalError::UnknownReference(name) if name == "$2"),
     );
     assert_eval_error(
         &engine,
@@ -52,7 +52,7 @@ fn user_session_supports_definitions_results_edits_and_recovery() {
         |err| matches!(err, EvalError::DependencyError(name) if name == "$3"),
     );
 
-    engine.set_entry("tax_rate", "0.08").unwrap();
+    engine.set_entry("$2", "0.08").unwrap();
     assert_value(&engine, "$3", 16.0);
     assert_value(&engine, "$4", 216.0);
 }
@@ -63,8 +63,10 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
 
     let valid = engine.execute("base = 10");
     let parse_error = engine.execute("broken = 1 +");
-    let cycle_a = engine.execute("a = b + 1");
-    let cycle_b = engine.execute("b = a + 1");
+    let cycle_a = engine.execute("a = 1");
+    let cycle_b = engine.execute("b = 2");
+    engine.set_entry("a", "b + 1").unwrap();
+    assert!(engine.set_entry("b", "a + 1").is_err());
     let dependent = engine.execute("a + base");
 
     assert_eq!(valid.state, EntryState::Value(10.0));
@@ -73,20 +75,19 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
         parse_error.state,
         EntryState::Error(DagcalError::Parse(_))
     ));
+    assert_eq!(cycle_a.state, EntryState::Value(1.0));
+    assert_eq!(cycle_b.state, EntryState::Value(2.0));
     assert!(matches!(
-        cycle_a.state,
-        EntryState::Error(DagcalError::Eval(EvalError::UnknownReference(_)))
-            | EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(_)))
-    ));
-    assert!(matches!(
-        cycle_b.state,
-        EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(_)))
+        engine.get("b"),
+        Some(EntryState::Error(DagcalError::Eval(
+            EvalError::CycleDetected(_)
+        )))
     ));
     assert_eq!(dependent.label.unwrap().to_string(), "$4");
     assert_eval_error(
         &engine,
         "$4",
-        |err| matches!(err, EvalError::DependencyError(name) if name == "a"),
+        |err| matches!(err, EvalError::DependencyError(name) if name == "$2"),
     );
     assert_value(&engine, "base", 10.0);
 }
@@ -96,6 +97,7 @@ fn public_api_supports_runtime_extensions_used_by_frontends() {
     let mut engine = Engine::new();
 
     let before_function = engine.execute("triple(14)");
+    engine.set_constant("tau", 6.0);
     let before_constant = engine.execute("tau / 2");
 
     assert_eq!(before_function.label.unwrap().to_string(), "$1");
@@ -105,11 +107,7 @@ fn public_api_supports_runtime_extensions_used_by_frontends() {
         "$1",
         |err| matches!(err, EvalError::UnknownFunction(name) if name == "triple"),
     );
-    assert_eval_error(
-        &engine,
-        "$2",
-        |err| matches!(err, EvalError::UnknownReference(name) if name == "tau"),
-    );
+    assert_value(&engine, "$2", 3.0);
 
     engine.register_fixed_function("triple", 1, |args| Ok(args[0] * 3.0));
     engine.set_constant("tau", std::f64::consts::TAU);
@@ -130,11 +128,17 @@ fn public_api_exposes_entries_for_frontend_state_rendering() {
 
     assert_eq!(engine.get_by_id(total_id), Some(&EntryState::Value(132.0)));
 
-    let mut entries = engine
+    let entries = engine
         .entries()
-        .map(|(label, entry)| (label.to_string(), entry.source.clone(), entry.state.clone()))
+        .into_iter()
+        .map(|entry| {
+            (
+                entry.label.to_string(),
+                entry.source.clone(),
+                entry.state.clone(),
+            )
+        })
         .collect::<Vec<_>>();
-    entries.sort_by(|left, right| left.0.cmp(&right.0));
 
     assert_eq!(
         entries,

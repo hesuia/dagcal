@@ -8,10 +8,8 @@ mod id;
 mod label;
 mod parser;
 
-pub use ast::{BinaryOp, Expr, Reference, Statement, UnaryOp};
-pub use engine::{CycleDiagnostics, Engine, Entry, EntryState, Execution};
+pub use engine::{CycleDiagnostics, Engine, EntryState, EntryView, Execution};
 pub use error::{DagcalError, EvalError};
-pub use function::{Function, FunctionRegistry, FunctionSignature};
-pub use id::{ExpressionId, ExpressionIdGenerator};
+pub use function::FunctionSignature;
+pub use id::ExpressionId;
 pub use label::EntryLabel;
-pub use parser::{parse_expression, parse_statement};
