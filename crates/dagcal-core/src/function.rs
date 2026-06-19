@@ -1,28 +1,61 @@
 use crate::error::EvalError;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
 type FunctionBody = dyn Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FunctionSignature {
+    Exact(usize),
+    Variadic { min: usize },
+}
+
+impl FunctionSignature {
+    pub fn exact(arity: usize) -> Self {
+        Self::Exact(arity)
+    }
+
+    pub fn variadic(min: usize) -> Self {
+        Self::Variadic { min }
+    }
+
+    pub fn accepts(&self, actual: usize) -> bool {
+        match self {
+            Self::Exact(expected) => *expected == actual,
+            Self::Variadic { min } => actual >= *min,
+        }
+    }
+}
+
+impl fmt::Display for FunctionSignature {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Exact(arity) => write!(formatter, "{arity} argument(s)"),
+            Self::Variadic { min } => write!(formatter, "at least {min} argument(s)"),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Function {
-    arity: usize,
+    signature: FunctionSignature,
     body: Arc<FunctionBody>,
 }
 
 impl Function {
-    pub fn new<F>(arity: usize, body: F) -> Self
+    pub fn new<F>(signature: FunctionSignature, body: F) -> Self
     where
         F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
     {
         Self {
-            arity,
+            signature,
             body: Arc::new(body),
         }
     }
 
-    pub fn arity(&self) -> usize {
-        self.arity
+    pub fn signature(&self) -> &FunctionSignature {
+        &self.signature
     }
 
     pub fn call(&self, args: &[f64]) -> Result<f64, EvalError> {
@@ -80,28 +113,72 @@ impl FunctionRegistry {
         registry.register_binary("pow", f64::powf);
         registry.register_binary("logn", f64::log);
         registry.register_binary("copysign", f64::copysign);
-        registry.register_binary("max", f64::max);
-        registry.register_binary("min", f64::min);
+
+        registry.register_variadic("sum", 0, |args| Ok(args.iter().sum()));
+        registry.register_variadic("avg", 1, |args| {
+            Ok(args.iter().sum::<f64>() / args.len() as f64)
+        });
+        registry.register_variadic("max", 1, |args| {
+            Ok(args
+                .iter()
+                .copied()
+                .fold(f64::NEG_INFINITY, |max, value| max.max(value)))
+        });
+        registry.register_variadic("min", 1, |args| {
+            Ok(args
+                .iter()
+                .copied()
+                .fold(f64::INFINITY, |min, value| min.min(value)))
+        });
         registry
     }
 
-    pub fn register<F>(&mut self, name: impl Into<String>, arity: usize, body: F)
+    pub fn register<F>(&mut self, name: impl Into<String>, signature: FunctionSignature, body: F)
     where
         F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
     {
         self.functions
-            .insert(name.into(), Function::new(arity, body));
+            .insert(name.into(), Function::new(signature, body));
     }
 
     fn register_unary(&mut self, name: impl Into<String>, body: fn(f64) -> f64) {
-        self.register(name, 1, move |args| Ok(body(args[0])));
+        let name = name.into();
+        let function_name = name.clone();
+        self.register(name, FunctionSignature::exact(1), move |args| {
+            finite_function_result(&function_name, body(args[0]))
+        });
     }
 
     fn register_binary(&mut self, name: impl Into<String>, body: fn(f64, f64) -> f64) {
-        self.register(name, 2, move |args| Ok(body(args[0], args[1])));
+        let name = name.into();
+        let function_name = name.clone();
+        self.register(name, FunctionSignature::exact(2), move |args| {
+            finite_function_result(&function_name, body(args[0], args[1]))
+        });
+    }
+
+    fn register_variadic<F>(&mut self, name: impl Into<String>, min: usize, body: F)
+    where
+        F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
+    {
+        let name = name.into();
+        let function_name = name.clone();
+        self.register(name, FunctionSignature::variadic(min), move |args| {
+            finite_function_result(&function_name, body(args)?)
+        });
     }
 
     pub fn get(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
+    }
+}
+
+fn finite_function_result(name: &str, value: f64) -> Result<f64, EvalError> {
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(EvalError::Math(format!(
+            "function `{name}` produced non-finite result"
+        )))
     }
 }

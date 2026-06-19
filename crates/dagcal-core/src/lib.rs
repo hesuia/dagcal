@@ -11,7 +11,7 @@ mod parser;
 pub use ast::{BinaryOp, Expr, Statement, UnaryOp};
 pub use engine::{CycleDiagnostics, Engine, Entry, EntryState, Execution};
 pub use error::{DagcalError, EvalError};
-pub use function::{Function, FunctionRegistry};
+pub use function::{Function, FunctionRegistry, FunctionSignature};
 pub use id::{ExpressionId, ExpressionIdGenerator};
 pub use label::EntryLabel;
 pub use parser::{parse_expression, parse_statement};
@@ -55,15 +55,32 @@ mod tests {
         assert_close(engine.eval_once("hypot(3, 4)").unwrap(), 5.0);
         assert_close(engine.eval_once("pow(2, 3)").unwrap(), 8.0);
         assert_close(engine.eval_once("logn(8, 2)").unwrap(), 3.0);
+        assert_close(engine.eval_once("sum()").unwrap(), 0.0);
+        assert_close(engine.eval_once("sum(1, 2, 3)").unwrap(), 6.0);
+        assert_close(engine.eval_once("avg(2, 4, 6)").unwrap(), 4.0);
+        assert_close(engine.eval_once("min(3, 1, 2)").unwrap(), 1.0);
+        assert_close(engine.eval_once("max(3, 1, 2)").unwrap(), 3.0);
     }
 
     #[test]
     fn supports_custom_functions() {
         let mut engine = Engine::new();
 
-        engine.register_function("double", 1, |args| Ok(args[0] * 2.0));
+        engine.register_function("double", FunctionSignature::exact(1), |args| {
+            Ok(args[0] * 2.0)
+        });
 
         assert_close(engine.eval_once("double(21)").unwrap(), 42.0);
+    }
+
+    #[test]
+    fn supports_custom_variadic_functions() {
+        let mut engine = Engine::new();
+
+        engine.register_variadic_function("product", 0, |args| Ok(args.iter().product()));
+
+        assert_close(engine.eval_once("product()").unwrap(), 1.0);
+        assert_close(engine.eval_once("product(2, 3, 4)").unwrap(), 24.0);
     }
 
     #[test]
@@ -98,9 +115,48 @@ mod tests {
             engine.eval_once("sin()"),
             Err(DagcalError::Eval(EvalError::ArityMismatch {
                 name,
-                expected: 1,
+                expected: FunctionSignature::Exact(1),
                 actual: 0,
             })) if name == "sin"
+        ));
+        assert!(matches!(
+            engine.eval_once("avg()"),
+            Err(DagcalError::Eval(EvalError::ArityMismatch {
+                name,
+                expected: FunctionSignature::Variadic { min: 1 },
+                actual: 0,
+            })) if name == "avg"
+        ));
+    }
+
+    #[test]
+    fn standardizes_non_finite_math_results() {
+        let engine = Engine::new();
+
+        assert!(matches!(
+            engine.eval_once("sqrt(-1)"),
+            Err(DagcalError::Eval(EvalError::Math(message)))
+                if message == "function `sqrt` produced non-finite result"
+        ));
+        assert!(matches!(
+            engine.eval_once("ln(-1)"),
+            Err(DagcalError::Eval(EvalError::Math(message)))
+                if message == "function `ln` produced non-finite result"
+        ));
+        assert!(matches!(
+            engine.eval_once("log(0)"),
+            Err(DagcalError::Eval(EvalError::Math(message)))
+                if message == "function `log` produced non-finite result"
+        ));
+        assert!(matches!(
+            engine.eval_once("acos(2)"),
+            Err(DagcalError::Eval(EvalError::Math(message)))
+                if message == "function `acos` produced non-finite result"
+        ));
+        assert!(matches!(
+            engine.eval_once("1e308 ^ 2"),
+            Err(DagcalError::Eval(EvalError::Math(message)))
+                if message == "power operation produced non-finite result"
         ));
     }
 
@@ -118,7 +174,7 @@ mod tests {
         let mut engine = Engine::new();
 
         assert!(engine.set_entry("x", "triple(14)").is_err());
-        engine.register_function("triple", 1, |args| Ok(args[0] * 3.0));
+        engine.register_fixed_function("triple", 1, |args| Ok(args[0] * 3.0));
 
         assert_eq!(engine.get("x"), Some(&EntryState::Value(42.0)));
     }

@@ -39,17 +39,17 @@ pub(crate) fn eval_expr(
                         Ok(lhs % rhs)
                     }
                 }
-                BinaryOp::Pow => Ok(lhs.powf(rhs)),
+                BinaryOp::Pow => finite_operator_result("power", lhs.powf(rhs)),
             }
         }
         Expr::Call { name, args } => {
             let function = functions
                 .get(name)
                 .ok_or_else(|| EvalError::UnknownFunction(name.clone()))?;
-            if function.arity() != args.len() {
+            if !function.signature().accepts(args.len()) {
                 return Err(EvalError::ArityMismatch {
                     name: name.clone(),
-                    expected: function.arity(),
+                    expected: function.signature().clone(),
                     actual: args.len(),
                 });
             }
@@ -60,5 +60,15 @@ pub(crate) fn eval_expr(
             }
             function.call(&evaluated_args)
         }
+    }
+}
+
+fn finite_operator_result(name: &str, value: f64) -> Result<f64, EvalError> {
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(EvalError::Math(format!(
+            "{name} operation produced non-finite result"
+        )))
     }
 }

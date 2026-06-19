@@ -1,3 +1,4 @@
+use crate::function::FunctionSignature;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone, PartialEq)]
@@ -17,10 +18,10 @@ pub enum EvalError {
     #[error("unknown function `{0}`")]
     UnknownFunction(String),
 
-    #[error("function `{name}` expected {expected} argument(s), got {actual}")]
+    #[error("function `{name}` expected {expected}, got {actual} argument(s)")]
     ArityMismatch {
         name: String,
-        expected: usize,
+        expected: FunctionSignature,
         actual: usize,
     },
 

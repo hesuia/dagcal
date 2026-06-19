@@ -2,7 +2,7 @@ use crate::ast::{Expr, Statement};
 use crate::dependency_graph::ReferenceGraph;
 use crate::error::{DagcalError, EvalError};
 use crate::eval::eval_expr;
-use crate::function::FunctionRegistry;
+use crate::function::{FunctionRegistry, FunctionSignature};
 use crate::id::{ExpressionId, ExpressionIdGenerator};
 use crate::label::EntryLabel;
 use crate::parser::{parse_expression, parse_statement};
@@ -115,12 +115,30 @@ impl Engine {
         }
     }
 
-    pub fn register_function<F>(&mut self, name: impl Into<String>, arity: usize, body: F)
+    pub fn register_function<F>(
+        &mut self,
+        name: impl Into<String>,
+        signature: FunctionSignature,
+        body: F,
+    ) where
+        F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
+    {
+        self.functions.register(name, signature, body);
+        self.recompute_all();
+    }
+
+    pub fn register_fixed_function<F>(&mut self, name: impl Into<String>, arity: usize, body: F)
     where
         F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
     {
-        self.functions.register(name, arity, body);
-        self.recompute_all();
+        self.register_function(name, FunctionSignature::exact(arity), body);
+    }
+
+    pub fn register_variadic_function<F>(&mut self, name: impl Into<String>, min: usize, body: F)
+    where
+        F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
+    {
+        self.register_function(name, FunctionSignature::variadic(min), body);
     }
 
     pub fn set_constant(&mut self, name: impl Into<String>, value: f64) {
