@@ -1,4 +1,4 @@
-use crate::ast::{Expr, Statement};
+use crate::ast::{Expr, Reference, Statement};
 use crate::dependency_graph::ReferenceGraph;
 use crate::error::{DagcalError, EvalError};
 use crate::eval::eval_expr;
@@ -12,17 +12,19 @@ use std::collections::{BTreeSet, HashMap};
 pub struct Entry {
     pub id: ExpressionId,
     pub label: EntryLabel,
+    pub name: Option<String>,
     pub source: String,
     pub ast: Option<Expr>,
-    pub references: BTreeSet<EntryLabel>,
+    pub references: BTreeSet<Reference>,
     pub state: EntryState,
 }
 
 impl Entry {
-    fn from_parsed(id: ExpressionId, label: EntryLabel, source: String, ast: Expr) -> Self {
+    fn from_parsed(id: ExpressionId, name: Option<String>, source: String, ast: Expr) -> Self {
         Self {
             id,
-            label,
+            label: EntryLabel::result(id.value()),
+            name,
             source,
             references: ast.references(),
             ast: Some(ast),
@@ -34,13 +36,14 @@ impl Entry {
 
     fn from_parse_error(
         id: ExpressionId,
-        label: EntryLabel,
+        name: Option<String>,
         source: String,
         err: DagcalError,
     ) -> Self {
         Self {
             id,
-            label,
+            label: EntryLabel::result(id.value()),
+            name,
             source,
             ast: None,
             references: BTreeSet::new(),
@@ -62,14 +65,28 @@ pub struct CycleDiagnostics {
     pub dependent_nodes: BTreeSet<String>,
 }
 
+#[derive(Debug, Clone)]
+enum EntryTarget {
+    Id(ExpressionId),
+    Name(String),
+}
+
+impl EntryTarget {
+    fn parse(input: &str) -> Result<Self, DagcalError> {
+        match EntryLabel::parse(input)? {
+            EntryLabel::Result(index) => Ok(Self::Id(ExpressionId::new(index))),
+            EntryLabel::Named(name) => Ok(Self::Name(name)),
+        }
+    }
+}
+
 pub struct Engine {
     entries: HashMap<ExpressionId, Entry>,
-    labels: HashMap<EntryLabel, ExpressionId>,
+    names: HashMap<String, ExpressionId>,
     constants: HashMap<String, f64>,
     functions: FunctionRegistry,
     dependency_graph: ReferenceGraph,
     id_generator: ExpressionIdGenerator,
-    next_result_index: usize,
 }
 
 impl Default for Engine {
@@ -82,7 +99,7 @@ impl Engine {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
-            labels: HashMap::new(),
+            names: HashMap::new(),
             constants: HashMap::from([
                 ("e".to_string(), std::f64::consts::E),
                 ("pi".to_string(), std::f64::consts::PI),
@@ -90,7 +107,6 @@ impl Engine {
             functions: FunctionRegistry::standard(),
             dependency_graph: ReferenceGraph::new(),
             id_generator: ExpressionIdGenerator::new(),
-            next_result_index: 1,
         }
     }
 
@@ -102,13 +118,14 @@ impl Engine {
         match parse_statement(input) {
             Ok(Statement::Definition { name, expr }) => {
                 let source = definition_source(input, &name);
-                self.save_parsed_entry(name, source, expr)
+                self.save_parsed_entry(EntryTarget::Name(name), source, expr)
             }
             Ok(Statement::Expression(expr)) => {
-                let label = self.allocate_result_label();
-                self.save_parsed_entry(label, input.trim().to_string(), expr)
+                let id = self.allocate_id();
+                self.save_parsed_entry(EntryTarget::Id(id), input.trim().to_string(), expr)
             }
             Err(err) => Execution {
+                id: None,
                 label: None,
                 state: EntryState::Error(err),
             },
@@ -154,11 +171,11 @@ impl Engine {
         label: impl AsRef<str>,
         source: impl Into<String>,
     ) -> Result<EntryState, DagcalError> {
-        let label = EntryLabel::parse(label.as_ref())?;
+        let target = EntryTarget::parse(label.as_ref())?;
         let source = source.into();
         let execution = match parse_expression(&source) {
-            Ok(ast) => self.save_parsed_entry(label, source, ast),
-            Err(err) => self.save_parse_error(label, source, err),
+            Ok(ast) => self.save_parsed_entry(target, source, ast),
+            Err(err) => self.save_parse_error(target, source, err),
         };
 
         match execution.state {
@@ -168,12 +185,12 @@ impl Engine {
     }
 
     pub fn remove_entry(&mut self, label: &str) -> Option<Entry> {
-        let label = EntryLabel::parse(label).ok()?;
-        let id = self.labels.get(&label).copied()?;
+        let target = EntryTarget::parse(label).ok()?;
+        let id = self.id_for_target(&target)?;
         let affected = self.collect_affected(id);
-        self.labels.remove(&label);
         let removed = self.entries.remove(&id);
         if removed.is_some() {
+            self.remove_name_for_id(id);
             self.rebuild_dependency_graph();
             self.recompute_ids(affected);
         }
@@ -190,8 +207,8 @@ impl Engine {
     }
 
     pub fn entry(&self, label: &str) -> Option<&Entry> {
-        let label = EntryLabel::parse(label).ok()?;
-        self.entry_for_label(&label)
+        let target = EntryTarget::parse(label).ok()?;
+        self.entry_for_target(&target)
     }
 
     /// Returns a stored expression by its internal ID.
@@ -219,7 +236,7 @@ impl Engine {
 
     pub fn eval_once(&self, source: &str) -> Result<f64, DagcalError> {
         let ast = parse_expression(source)?;
-        let mut resolve = |name: &EntryLabel| self.resolve_reference(name);
+        let mut resolve = |reference: &Reference| self.resolve_reference(reference);
         eval_expr(&ast, &self.functions, &mut resolve).map_err(DagcalError::Eval)
     }
 
@@ -228,43 +245,44 @@ impl Engine {
         self.recompute_ids(ids);
     }
 
-    fn allocate_result_label(&mut self) -> EntryLabel {
+    fn allocate_id(&mut self) -> ExpressionId {
         loop {
-            let label = EntryLabel::result(self.next_result_index);
-            self.next_result_index += 1;
-            if !self.labels.contains_key(&label) {
-                return label;
+            let id = self.id_generator.next();
+            if !self.entries.contains_key(&id) {
+                return id;
             }
         }
     }
 
-    fn save_parsed_entry(&mut self, label: EntryLabel, source: String, ast: Expr) -> Execution {
-        let id = self.resolve_or_create_id(&label);
-        let entry = Entry::from_parsed(id, label.clone(), source, ast);
+    fn save_parsed_entry(&mut self, target: EntryTarget, source: String, ast: Expr) -> Execution {
+        let (id, name) = self.resolve_or_create_id(target);
+        let entry = Entry::from_parsed(id, name, source, ast);
         self.entries.insert(id, entry);
         self.rebuild_dependency_graph();
         self.recompute_affected(&id);
 
         Execution {
-            label: Some(label),
+            id: Some(id),
+            label: Some(EntryLabel::result(id.value())),
             state: self.entries[&id].state.clone(),
         }
     }
 
     fn save_parse_error(
         &mut self,
-        label: EntryLabel,
+        target: EntryTarget,
         source: String,
         err: DagcalError,
     ) -> Execution {
-        let id = self.resolve_or_create_id(&label);
-        let entry = Entry::from_parse_error(id, label.clone(), source, err);
+        let (id, name) = self.resolve_or_create_id(target);
+        let entry = Entry::from_parse_error(id, name, source, err);
         self.entries.insert(id, entry);
         self.rebuild_dependency_graph();
         self.recompute_affected(&id);
 
         Execution {
-            label: Some(label),
+            id: Some(id),
+            label: Some(EntryLabel::result(id.value())),
             state: self.entries[&id].state.clone(),
         }
     }
@@ -313,7 +331,7 @@ impl Engine {
             return entry.state.clone();
         };
 
-        let mut resolve = |name: &EntryLabel| self.resolve_reference(name);
+        let mut resolve = |reference: &Reference| self.resolve_reference(reference);
         let result = eval_expr(ast, &self.functions, &mut resolve);
 
         match result {
@@ -322,50 +340,69 @@ impl Engine {
         }
     }
 
-    fn resolve_reference(&self, name: &EntryLabel) -> Result<f64, EvalError> {
-        if let Some(entry) = self.entry_for_label(name) {
+    fn resolve_reference(&self, reference: &Reference) -> Result<f64, EvalError> {
+        if let Some(entry) = self.entry_for_reference(reference) {
             match &entry.state {
                 EntryState::Value(value) => Ok(*value),
-                EntryState::Error(_) => Err(EvalError::DependencyError(name.to_string())),
+                EntryState::Error(_) => Err(EvalError::DependencyError(reference.display_name())),
             }
-        } else if let Some(value) = name
-            .constant_name()
-            .and_then(|constant| self.constants.get(constant))
-        {
-            Ok(*value)
         } else {
-            Err(EvalError::UnknownReference(name.to_string()))
+            match reference {
+                Reference::Name(name) => self
+                    .constants
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| EvalError::UnknownReference(name.clone())),
+                Reference::Id(_) => Err(EvalError::UnknownReference(reference.display_name())),
+            }
         }
     }
 
-    fn entry_for_label(&self, label: &EntryLabel) -> Option<&Entry> {
-        self.labels.get(label).and_then(|id| self.entries.get(id))
+    fn entry_for_target(&self, target: &EntryTarget) -> Option<&Entry> {
+        self.id_for_target(target)
+            .and_then(|id| self.entries.get(&id))
+    }
+
+    fn entry_for_reference(&self, reference: &Reference) -> Option<&Entry> {
+        match reference {
+            Reference::Id(id) => self.entries.get(id),
+            Reference::Name(name) => self.names.get(name).and_then(|id| self.entries.get(id)),
+        }
     }
 
     fn rebuild_dependency_graph(&mut self) {
-        let labels = &self.labels;
+        let names = &self.names;
         self.dependency_graph
             .rebuild(self.entries.iter().map(|(id, entry)| {
                 let references = entry
                     .references
                     .iter()
-                    .filter_map(|reference| labels.get(reference).copied())
+                    .filter_map(|reference| match reference {
+                        Reference::Id(id) => Some(*id),
+                        Reference::Name(name) => names.get(name).copied(),
+                    })
                     .collect::<BTreeSet<_>>();
                 (*id, references)
             }));
     }
 
-    fn resolve_or_create_id(&mut self, label: &EntryLabel) -> ExpressionId {
-        if let Some(id) = self.labels.get(label) {
-            return *id;
-        }
+    fn resolve_or_create_id(&mut self, target: EntryTarget) -> (ExpressionId, Option<String>) {
+        match target {
+            EntryTarget::Id(id) => {
+                self.id_generator.reserve_through(id.value());
+                let name = self.entries.get(&id).and_then(|entry| entry.name.clone());
+                (id, name)
+            }
+            EntryTarget::Name(name) => {
+                if let Some(id) = self.names.get(&name).copied() {
+                    return (id, Some(name));
+                }
 
-        let id = self.id_generator.next();
-        if let Some(index) = label.result_index() {
-            self.reserve_result_label_through(index);
+                let id = self.allocate_id();
+                self.names.insert(name.clone(), id);
+                (id, Some(name))
+            }
         }
-        self.labels.insert(label.clone(), id);
-        id
     }
 
     fn label_for_id(&self, id: ExpressionId) -> String {
@@ -379,23 +416,31 @@ impl Engine {
         ids.iter().map(|id| self.label_for_id(*id)).collect()
     }
 
-    fn reserve_result_label_through(&mut self, index: usize) {
-        self.next_result_index = self.next_result_index.max(index + 1);
+    fn id_for_target(&self, target: &EntryTarget) -> Option<ExpressionId> {
+        match target {
+            EntryTarget::Id(id) => Some(*id),
+            EntryTarget::Name(name) => self.names.get(name).copied(),
+        }
+    }
+
+    fn remove_name_for_id(&mut self, id: ExpressionId) {
+        self.names.retain(|_, entry_id| *entry_id != id);
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Execution {
+    pub id: Option<ExpressionId>,
     pub label: Option<EntryLabel>,
     pub state: EntryState,
 }
 
-fn definition_source(input: &str, name: &EntryLabel) -> String {
+fn definition_source(input: &str, name: &str) -> String {
     let Some((left, right)) = input.split_once('=') else {
         return input.trim().to_string();
     };
 
-    if left.trim() == name.to_string() {
+    if left.trim() == name {
         right.trim().to_string()
     } else {
         input.trim().to_string()
@@ -620,12 +665,12 @@ mod tests {
         assert_eval_error(
             &engine,
             "a",
-            |err| matches!(err, EvalError::CycleDetected(name) if name == "a"),
+            |err| matches!(err, EvalError::CycleDetected(name) if name == "$1"),
         );
 
         let diagnostics = engine.cycle_diagnostics();
-        assert_eq!(diagnostics.cycles, vec![BTreeSet::from(["a".to_string()])]);
-        assert_eq!(diagnostics.cycle_nodes, BTreeSet::from(["a".to_string()]));
+        assert_eq!(diagnostics.cycles, vec![BTreeSet::from(["$1".to_string()])]);
+        assert_eq!(diagnostics.cycle_nodes, BTreeSet::from(["$1".to_string()]));
         assert!(diagnostics.dependent_nodes.is_empty());
     }
 
@@ -643,15 +688,15 @@ mod tests {
 
         assert_eq!(
             diagnostics.cycles,
-            vec![BTreeSet::from(["a".to_string(), "b".to_string()])]
+            vec![BTreeSet::from(["$1".to_string(), "$2".to_string()])]
         );
         assert_eq!(
             diagnostics.cycle_nodes,
-            BTreeSet::from(["a".to_string(), "b".to_string()])
+            BTreeSet::from(["$1".to_string(), "$2".to_string()])
         );
         assert_eq!(
             diagnostics.dependent_nodes,
-            BTreeSet::from(["c".to_string(), "d".to_string()])
+            BTreeSet::from(["$3".to_string(), "$4".to_string()])
         );
         assert_eval_error(
             &engine,
@@ -681,22 +726,22 @@ mod tests {
         assert_eq!(
             diagnostics.cycles,
             vec![
-                BTreeSet::from(["a".to_string(), "b".to_string()]),
-                BTreeSet::from(["x".to_string(), "y".to_string()])
+                BTreeSet::from(["$1".to_string(), "$2".to_string()]),
+                BTreeSet::from(["$3".to_string(), "$4".to_string()])
             ]
         );
         assert_eq!(
             diagnostics.cycle_nodes,
             BTreeSet::from([
-                "a".to_string(),
-                "b".to_string(),
-                "x".to_string(),
-                "y".to_string()
+                "$1".to_string(),
+                "$2".to_string(),
+                "$3".to_string(),
+                "$4".to_string()
             ])
         );
         assert_eq!(
             diagnostics.dependent_nodes,
-            BTreeSet::from(["z".to_string()])
+            BTreeSet::from(["$5".to_string()])
         );
     }
 
@@ -735,12 +780,12 @@ mod tests {
         assert_eval_error(
             &engine,
             "cycle_left",
-            |err| matches!(err, EvalError::CycleDetected(name) if name == "cycle_left"),
+            |err| matches!(err, EvalError::CycleDetected(name) if name == "$3"),
         );
         assert_eval_error(
             &engine,
             "cycle_right",
-            |err| matches!(err, EvalError::CycleDetected(name) if name == "cycle_right"),
+            |err| matches!(err, EvalError::CycleDetected(name) if name == "$4"),
         );
     }
 
@@ -751,12 +796,13 @@ mod tests {
         let subtotal = engine.execute("subtotal = 100");
         let taxed = engine.execute("subtotal * 1.1");
 
-        assert_eq!(execution_label(&subtotal), "subtotal");
+        assert_eq!(execution_label(&subtotal), "$1");
         assert_eq!(subtotal.state, EntryState::Value(100.0));
-        assert_eq!(execution_label(&taxed), "$1");
+        assert_eq!(execution_label(&taxed), "$2");
         assert_eq!(taxed.state, EntryState::Value(110.00000000000001));
         assert_eq!(engine.entry("subtotal").unwrap().source, "100");
-        assert_eq!(engine.entry("$1").unwrap().source, "subtotal * 1.1");
+        assert_eq!(engine.entry("$1").unwrap().source, "100");
+        assert_eq!(engine.entry("$2").unwrap().source, "subtotal * 1.1");
     }
 
     #[test]
@@ -911,6 +957,19 @@ mod tests {
     }
 
     #[test]
+    fn dollar_references_target_expression_ids_for_named_entries() {
+        let mut engine = Engine::new();
+
+        engine.execute("subtotal = 100");
+        engine.execute("tax_rate = 0.1");
+        engine.execute("subtotal * $2");
+
+        assert_value(&engine, "$1", 100.0);
+        assert_value(&engine, "$2", 0.1);
+        assert_value(&engine, "$3", 10.0);
+    }
+
+    #[test]
     fn exposes_entries_for_read_only_listing() {
         let mut engine = Engine::new();
 
@@ -925,11 +984,11 @@ mod tests {
 
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].0, "$1");
-        assert_eq!(entries[0].1, "subtotal * 1.1");
-        assert_eq!(entries[0].2, EntryState::Value(110.00000000000001));
-        assert_eq!(entries[1].0, "subtotal");
-        assert_eq!(entries[1].1, "100");
-        assert_eq!(entries[1].2, EntryState::Value(100.0));
+        assert_eq!(entries[0].1, "100");
+        assert_eq!(entries[0].2, EntryState::Value(100.0));
+        assert_eq!(entries[1].0, "$2");
+        assert_eq!(entries[1].1, "subtotal * 1.1");
+        assert_eq!(entries[1].2, EntryState::Value(110.00000000000001));
     }
 
     #[test]

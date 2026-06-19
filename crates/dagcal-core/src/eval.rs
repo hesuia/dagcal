@@ -1,12 +1,11 @@
-use crate::ast::{BinaryOp, Expr, UnaryOp};
+use crate::ast::{BinaryOp, Expr, Reference, UnaryOp};
 use crate::error::EvalError;
 use crate::function::FunctionRegistry;
-use crate::label::EntryLabel;
 
 pub(crate) fn eval_expr(
     expr: &Expr,
     functions: &FunctionRegistry,
-    resolve: &mut dyn FnMut(&EntryLabel) -> Result<f64, EvalError>,
+    resolve: &mut dyn FnMut(&Reference) -> Result<f64, EvalError>,
 ) -> Result<f64, EvalError> {
     match expr {
         Expr::Number(value) => Ok(*value),
@@ -78,6 +77,7 @@ mod tests {
     use super::*;
     use crate::error::DagcalError;
     use crate::function::FunctionSignature;
+    use crate::id::ExpressionId;
     use crate::parser::parse_expression;
     use std::collections::HashMap;
 
@@ -93,15 +93,23 @@ mod tests {
         let expr = parse_expression(source).unwrap();
         let refs = refs
             .iter()
-            .map(|(name, value)| (EntryLabel::parse(name).unwrap(), *value))
+            .map(|(name, value)| (parse_test_reference(name), *value))
             .collect::<HashMap<_, _>>();
-        let mut resolve = |name: &EntryLabel| {
-            refs.get(name)
+        let mut resolve = |reference: &Reference| {
+            refs.get(reference)
                 .copied()
-                .ok_or_else(|| EvalError::UnknownReference(name.to_string()))
+                .ok_or_else(|| EvalError::UnknownReference(reference.display_name()))
         };
 
         eval_expr(&expr, functions, &mut resolve)
+    }
+
+    fn parse_test_reference(input: &str) -> Reference {
+        if let Some(digits) = input.strip_prefix('$') {
+            return Reference::Id(ExpressionId::new(digits.parse().unwrap()));
+        }
+
+        Reference::Name(input.to_string())
     }
 
     fn eval_standard(source: &str) -> Result<f64, EvalError> {

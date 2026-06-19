@@ -1,5 +1,6 @@
-use crate::ast::{BinaryOp, Expr, Statement, UnaryOp};
+use crate::ast::{BinaryOp, Expr, Reference, Statement, UnaryOp};
 use crate::error::DagcalError;
+use crate::id::ExpressionId;
 use crate::label::EntryLabel;
 use pest::Parser;
 use pest::iterators::Pair;
@@ -49,7 +50,7 @@ fn build_definition(pair: Pair<'_, Rule>) -> Result<Statement, DagcalError> {
         .ok_or_else(|| DagcalError::Parse("expected definition expression".to_string()))?;
 
     Ok(Statement::Definition {
-        name: EntryLabel::named(name.as_str())?,
+        name: EntryLabel::named(name.as_str())?.to_string(),
         expr: build_expr(expr)?,
     })
 }
@@ -70,12 +71,31 @@ fn build_expr(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
             .map_err(|err| {
                 DagcalError::Parse(format!("invalid number `{}`: {err}", pair.as_str()))
             }),
-        Rule::ident | Rule::result_ref => Ok(Expr::Reference(EntryLabel::parse(pair.as_str())?)),
+        Rule::ident => Ok(Expr::Reference(Reference::Name(pair.as_str().to_string()))),
+        Rule::result_ref => {
+            let id = parse_result_ref(pair.as_str())?;
+            Ok(Expr::Reference(Reference::Id(id)))
+        }
         _ => Err(DagcalError::Parse(format!(
             "unexpected parser rule {:?}",
             pair.as_rule()
         ))),
     }
+}
+
+fn parse_result_ref(input: &str) -> Result<ExpressionId, DagcalError> {
+    let digits = input
+        .strip_prefix('$')
+        .ok_or_else(|| DagcalError::Parse(format!("invalid result reference `{input}`")))?;
+    let value = digits
+        .parse::<usize>()
+        .map_err(|_| DagcalError::Parse(format!("invalid result reference `{input}`")))?;
+    if value == 0 {
+        return Err(DagcalError::Parse(format!(
+            "invalid result reference `{input}`"
+        )));
+    }
+    Ok(ExpressionId::new(value))
 }
 
 fn build_only_child(pair: Pair<'_, Rule>) -> Result<Expr, DagcalError> {
@@ -249,8 +269,8 @@ mod tests {
         assert_eq!(
             expr.references(),
             BTreeSet::from([
-                EntryLabel::Named("pi".to_string()),
-                EntryLabel::Named("x".to_string())
+                Reference::Name("pi".to_string()),
+                Reference::Name("x".to_string())
             ])
         );
     }
@@ -262,9 +282,9 @@ mod tests {
         assert_eq!(
             expr.references(),
             BTreeSet::from([
-                EntryLabel::Result(1),
-                EntryLabel::Result(20),
-                EntryLabel::Named("subtotal".to_string())
+                Reference::Id(ExpressionId::new(1)),
+                Reference::Id(ExpressionId::new(20)),
+                Reference::Name("subtotal".to_string())
             ])
         );
     }
@@ -276,8 +296,8 @@ mod tests {
         assert_eq!(
             expr.references(),
             BTreeSet::from([
-                EntryLabel::Named("x".to_string()),
-                EntryLabel::Named("y".to_string())
+                Reference::Name("x".to_string()),
+                Reference::Name("y".to_string())
             ])
         );
     }
@@ -288,10 +308,10 @@ mod tests {
 
         match statement {
             Statement::Definition { name, expr } => {
-                assert_eq!(name, EntryLabel::Named("subtotal".to_string()));
+                assert_eq!(name, "subtotal");
                 assert_eq!(
                     expr.references(),
-                    BTreeSet::from([EntryLabel::Named("tax".to_string())])
+                    BTreeSet::from([Reference::Name("tax".to_string())])
                 );
             }
             other => panic!("expected definition, got {other:?}"),
@@ -304,7 +324,10 @@ mod tests {
 
         match statement {
             Statement::Expression(expr) => {
-                assert_eq!(expr.references(), BTreeSet::from([EntryLabel::Result(1)]));
+                assert_eq!(
+                    expr.references(),
+                    BTreeSet::from([Reference::Id(ExpressionId::new(1))])
+                );
             }
             other => panic!("expected expression, got {other:?}"),
         }

@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
 
-use crate::label::EntryLabel;
+use crate::id::ExpressionId;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Number(f64),
-    Reference(EntryLabel),
+    Reference(Reference),
     Unary {
         op: UnaryOp,
         rhs: Box<Expr>,
@@ -24,7 +24,22 @@ pub enum Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     Expression(Expr),
-    Definition { name: EntryLabel, expr: Expr },
+    Definition { name: String, expr: Expr },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Reference {
+    Id(ExpressionId),
+    Name(String),
+}
+
+impl Reference {
+    pub fn display_name(&self) -> String {
+        match self {
+            Self::Id(id) => format!("${}", id.value()),
+            Self::Name(name) => name.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,13 +59,13 @@ pub enum BinaryOp {
 }
 
 impl Expr {
-    pub fn references(&self) -> BTreeSet<EntryLabel> {
+    pub fn references(&self) -> BTreeSet<Reference> {
         let mut refs = BTreeSet::new();
         self.collect_references(&mut refs);
         refs
     }
 
-    fn collect_references(&self, refs: &mut BTreeSet<EntryLabel>) {
+    fn collect_references(&self, refs: &mut BTreeSet<Reference>) {
         match self {
             Expr::Number(_) => {}
             Expr::Reference(name) => {

@@ -23,36 +23,38 @@ fn user_session_supports_definitions_results_edits_and_recovery() {
     let subtotal = engine.execute("subtotal = 100");
     let tax_rate = engine.execute("tax_rate = 0.1");
     let tax = engine.execute("subtotal * tax_rate");
-    let total = engine.execute("subtotal + $1");
+    let total = engine.execute("subtotal + $3");
 
-    assert_eq!(subtotal.label.unwrap().to_string(), "subtotal");
+    assert_eq!(subtotal.label.unwrap().to_string(), "$1");
     assert_eq!(subtotal.state, EntryState::Value(100.0));
-    assert_eq!(tax_rate.label.unwrap().to_string(), "tax_rate");
+    assert_eq!(tax_rate.label.unwrap().to_string(), "$2");
     assert_eq!(tax_rate.state, EntryState::Value(0.1));
-    assert_eq!(tax.label.unwrap().to_string(), "$1");
-    assert_eq!(total.label.unwrap().to_string(), "$2");
-    assert_value(&engine, "$1", 10.0);
-    assert_value(&engine, "$2", 110.0);
+    assert_eq!(tax.label.unwrap().to_string(), "$3");
+    assert_eq!(total.label.unwrap().to_string(), "$4");
+    assert_value(&engine, "$1", 100.0);
+    assert_value(&engine, "$3", 10.0);
+    assert_value(&engine, "$4", 110.0);
 
     engine.set_entry("subtotal", "200").unwrap();
-    assert_value(&engine, "$1", 20.0);
-    assert_value(&engine, "$2", 220.0);
+    assert_value(&engine, "$1", 200.0);
+    assert_value(&engine, "$3", 20.0);
+    assert_value(&engine, "$4", 220.0);
 
     engine.remove_entry("tax_rate");
     assert_eval_error(
         &engine,
-        "$1",
+        "$3",
         |err| matches!(err, EvalError::UnknownReference(name) if name == "tax_rate"),
     );
     assert_eval_error(
         &engine,
-        "$2",
-        |err| matches!(err, EvalError::DependencyError(name) if name == "$1"),
+        "$4",
+        |err| matches!(err, EvalError::DependencyError(name) if name == "$3"),
     );
 
     engine.set_entry("tax_rate", "0.08").unwrap();
-    assert_value(&engine, "$1", 16.0);
-    assert_value(&engine, "$2", 216.0);
+    assert_value(&engine, "$3", 16.0);
+    assert_value(&engine, "$4", 216.0);
 }
 
 #[test]
@@ -80,10 +82,10 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
         cycle_b.state,
         EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(_)))
     ));
-    assert_eq!(dependent.label.unwrap().to_string(), "$1");
+    assert_eq!(dependent.label.unwrap().to_string(), "$4");
     assert_eval_error(
         &engine,
-        "$1",
+        "$4",
         |err| matches!(err, EvalError::DependencyError(name) if name == "a"),
     );
     assert_value(&engine, "base", 10.0);
@@ -139,18 +141,18 @@ fn public_api_exposes_entries_for_frontend_state_rendering() {
         vec![
             (
                 "$1".to_string(),
-                "subtotal + tax".to_string(),
-                EntryState::Value(132.0),
-            ),
-            (
-                "subtotal".to_string(),
                 "120".to_string(),
                 EntryState::Value(120.0),
             ),
             (
-                "tax".to_string(),
+                "$2".to_string(),
                 "subtotal * 0.1".to_string(),
                 EntryState::Value(12.0),
+            ),
+            (
+                "$3".to_string(),
+                "subtotal + tax".to_string(),
+                EntryState::Value(132.0),
             ),
         ]
     );

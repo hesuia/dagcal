@@ -33,20 +33,6 @@ impl EntryLabel {
         assert!(index > 0, "result labels must be 1-based");
         Self::Result(index)
     }
-
-    pub(crate) fn result_index(&self) -> Option<usize> {
-        match self {
-            Self::Result(index) => Some(*index),
-            Self::Named(_) => None,
-        }
-    }
-
-    pub(crate) fn constant_name(&self) -> Option<&str> {
-        match self {
-            Self::Named(name) => Some(name),
-            Self::Result(_) => None,
-        }
-    }
 }
 
 impl fmt::Display for EntryLabel {

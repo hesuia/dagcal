@@ -8,7 +8,7 @@ mod id;
 mod label;
 mod parser;
 
-pub use ast::{BinaryOp, Expr, Statement, UnaryOp};
+pub use ast::{BinaryOp, Expr, Reference, Statement, UnaryOp};
 pub use engine::{CycleDiagnostics, Engine, Entry, EntryState, Execution};
 pub use error::{DagcalError, EvalError};
 pub use function::{Function, FunctionRegistry, FunctionSignature};
