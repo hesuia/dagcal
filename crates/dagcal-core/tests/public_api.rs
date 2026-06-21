@@ -117,6 +117,31 @@ fn public_api_supports_runtime_extensions_used_by_frontends() {
 }
 
 #[test]
+fn public_api_normalizes_non_finite_runtime_extensions_to_math_errors() {
+    let mut engine = Engine::new();
+
+    engine.set_constant("tau", 6.0);
+    let constant = engine.execute("tau + 1");
+    let function = engine.execute("explode()");
+
+    engine.set_constant("tau", f64::NAN);
+    engine.register_fixed_function("explode", 0, |_| Ok(f64::INFINITY));
+
+    assert_eq!(constant.id.unwrap().to_string(), "$1");
+    assert_eq!(function.id.unwrap().to_string(), "$2");
+    assert_eval_error(
+        &engine,
+        "$1",
+        |err| matches!(err, EvalError::Math(message) if message == "constant `tau` produced non-finite result"),
+    );
+    assert_eval_error(
+        &engine,
+        "$2",
+        |err| matches!(err, EvalError::Math(message) if message == "function `explode` produced non-finite result"),
+    );
+}
+
+#[test]
 fn public_api_exposes_entries_for_frontend_state_rendering() {
     let mut engine = Engine::new();
 
