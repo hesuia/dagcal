@@ -354,6 +354,12 @@ mod tests {
     }
 
     #[test]
+    fn parses_standalone_number_literals() {
+        assert_eq!(parse_expression("10").unwrap(), ParsedExpr::Number(10.0));
+        assert_eq!(parse_expression("4.2").unwrap(), ParsedExpr::Number(4.2));
+    }
+
+    #[test]
     fn parses_power_as_right_associative() {
         let expr = parse_expression("2 ^ 3 ^ 2").unwrap();
 

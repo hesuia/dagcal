@@ -58,6 +58,21 @@ fn user_session_supports_definitions_results_edits_and_recovery() {
 }
 
 #[test]
+fn public_api_executes_standalone_number_literals() {
+    let mut engine = Engine::new();
+
+    let integer = engine.execute("10");
+    let decimal = engine.execute("4.2");
+
+    assert_eq!(integer.id.unwrap().to_string(), "$1");
+    assert_eq!(integer.state, EntryState::Value(10.0));
+    assert_eq!(decimal.id.unwrap().to_string(), "$2");
+    assert_eq!(decimal.state, EntryState::Value(4.2));
+    assert_value(&engine, "$1", 10.0);
+    assert_value(&engine, "$2", 4.2);
+}
+
+#[test]
 fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
     let mut engine = Engine::new();
 
