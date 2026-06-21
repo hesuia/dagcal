@@ -8,7 +8,7 @@ mod target;
 use self::context::EvaluationContext;
 use self::entry::Entry;
 use self::recompute::Recomputer;
-use self::resolver::Resolver;
+use self::resolver::resolve_expr;
 use self::store::EntryStore;
 use self::target::EntryTarget;
 use crate::ast::{ParsedExpr, ParsedStatement};
@@ -227,7 +227,7 @@ impl Engine {
     }
 
     fn resolve_expr(&self, expr: ParsedExpr) -> Result<crate::ast::ResolvedExpr, EvalError> {
-        Resolver::new(&self.store, self.context.constants()).resolve_expr(expr)
+        resolve_expr(&self.store, self.context.constants(), expr)
     }
 
     fn display_names_for_ids(&self, ids: &BTreeSet<ExpressionId>) -> BTreeSet<String> {
