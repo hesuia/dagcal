@@ -1,7 +1,7 @@
 use dagcal_core::{DagcalError, Engine, EntryState, EvalError};
 
 fn assert_value(engine: &Engine, label: &str, expected: f64) {
-    match engine.get(label) {
+    match engine.state(label) {
         Some(EntryState::Value(actual)) => {
             assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
         }
@@ -10,7 +10,7 @@ fn assert_value(engine: &Engine, label: &str, expected: f64) {
 }
 
 fn assert_eval_error(engine: &Engine, label: &str, matches: impl FnOnce(&EvalError) -> bool) {
-    match engine.get(label) {
+    match engine.state(label) {
         Some(EntryState::Error(DagcalError::Eval(err))) if matches(err) => {}
         other => panic!("expected eval error for {label}, got {other:?}"),
     }
@@ -78,7 +78,7 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
     assert_eq!(cycle_a.state, EntryState::Value(1.0));
     assert_eq!(cycle_b.state, EntryState::Value(2.0));
     assert!(matches!(
-        engine.get("b"),
+        engine.state("b"),
         Some(EntryState::Error(DagcalError::Eval(
             EvalError::CycleDetected(_)
         )))
@@ -126,7 +126,10 @@ fn public_api_exposes_entries_for_frontend_state_rendering() {
     let total_label = total.label.unwrap().to_string();
     let total_id = engine.entry(&total_label).unwrap().id;
 
-    assert_eq!(engine.get_by_id(total_id), Some(&EntryState::Value(132.0)));
+    assert_eq!(
+        engine.state_by_id(total_id),
+        Some(&EntryState::Value(132.0))
+    );
 
     let entries = engine
         .entries()

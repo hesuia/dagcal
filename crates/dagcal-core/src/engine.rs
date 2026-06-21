@@ -1,89 +1,25 @@
-use crate::ast::{ParsedExpr, ParsedReference, ParsedStatement, ResolvedExpr};
-use crate::dependency_graph::ReferenceGraph;
+mod context;
+mod entry;
+mod recompute;
+mod resolver;
+mod store;
+mod target;
+
+use self::context::EvaluationContext;
+use self::entry::Entry;
+use self::recompute::Recomputer;
+use self::resolver::Resolver;
+use self::store::EntryStore;
+use self::target::EntryTarget;
+use crate::ast::{ParsedExpr, ParsedStatement};
 use crate::error::{DagcalError, EvalError};
-use crate::eval::eval_expr;
-use crate::function::{FunctionRegistry, FunctionSignature};
-use crate::id::{ExpressionId, ExpressionIdGenerator};
+use crate::function::FunctionSignature;
+use crate::id::ExpressionId;
 use crate::label::EntryLabel;
 use crate::parser::{parse_expression, parse_statement};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
-#[derive(Debug, Clone)]
-pub(crate) struct Entry {
-    pub id: ExpressionId,
-    pub label: EntryLabel,
-    pub name: Option<String>,
-    pub source: String,
-    pub ast: Option<ResolvedExpr>,
-    pub references: BTreeSet<ExpressionId>,
-    pub state: EntryState,
-}
-
-impl Entry {
-    fn from_resolved(
-        id: ExpressionId,
-        name: Option<String>,
-        source: String,
-        ast: ResolvedExpr,
-    ) -> Self {
-        let references = ast.references();
-        Self {
-            id,
-            label: EntryLabel::result(id.value()),
-            name,
-            source,
-            references,
-            ast: Some(ast),
-            state: EntryState::Error(DagcalError::Eval(EvalError::DependencyError(
-                id.to_string(),
-            ))),
-        }
-    }
-
-    fn from_parse_error(
-        id: ExpressionId,
-        name: Option<String>,
-        source: String,
-        err: DagcalError,
-    ) -> Self {
-        Self {
-            id,
-            label: EntryLabel::result(id.value()),
-            name,
-            source,
-            ast: None,
-            references: BTreeSet::new(),
-            state: EntryState::Error(err),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct EntryView {
-    pub id: ExpressionId,
-    pub label: EntryLabel,
-    pub name: Option<String>,
-    pub source: String,
-    pub state: EntryState,
-}
-
-impl From<&Entry> for EntryView {
-    fn from(entry: &Entry) -> Self {
-        Self {
-            id: entry.id,
-            label: entry.label.clone(),
-            name: entry.name.clone(),
-            source: entry.source.clone(),
-            state: entry.state.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum EntryState {
-    Value(f64),
-    Error(DagcalError),
-}
+pub use self::entry::{EntryState, EntryView, Execution};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CycleDiagnostics {
@@ -92,28 +28,10 @@ pub struct CycleDiagnostics {
     pub dependent_nodes: BTreeSet<String>,
 }
 
-#[derive(Debug, Clone)]
-enum EntryTarget {
-    Id(ExpressionId),
-    Name(String),
-}
-
-impl EntryTarget {
-    fn parse(input: &str) -> Result<Self, DagcalError> {
-        match EntryLabel::parse(input)? {
-            EntryLabel::Result(index) => Ok(Self::Id(ExpressionId::new(index))),
-            EntryLabel::Named(name) => Ok(Self::Name(name)),
-        }
-    }
-}
-
 pub struct Engine {
-    entries: HashMap<ExpressionId, Entry>,
-    names: HashMap<String, ExpressionId>,
-    constants: HashMap<String, f64>,
-    functions: FunctionRegistry,
-    dependency_graph: ReferenceGraph,
-    id_generator: ExpressionIdGenerator,
+    store: EntryStore,
+    context: EvaluationContext,
+    recomputer: Recomputer,
 }
 
 impl Default for Engine {
@@ -125,15 +43,9 @@ impl Default for Engine {
 impl Engine {
     pub fn new() -> Self {
         Self {
-            entries: HashMap::new(),
-            names: HashMap::new(),
-            constants: HashMap::from([
-                ("e".to_string(), std::f64::consts::E),
-                ("pi".to_string(), std::f64::consts::PI),
-            ]),
-            functions: FunctionRegistry::standard(),
-            dependency_graph: ReferenceGraph::new(),
-            id_generator: ExpressionIdGenerator::new(),
+            store: EntryStore::new(),
+            context: EvaluationContext::new(),
+            recomputer: Recomputer::new(),
         }
     }
 
@@ -148,7 +60,7 @@ impl Engine {
                 self.save_parsed_entry(EntryTarget::Name(name), source, expr)
             }
             Ok(ParsedStatement::Expression(expr)) => {
-                let id = self.allocate_id();
+                let id = self.store.allocate_id();
                 self.save_parsed_entry(EntryTarget::Id(id), input.trim().to_string(), expr)
             }
             Err(err) => Execution {
@@ -159,7 +71,7 @@ impl Engine {
         }
     }
 
-    pub fn register_function<F>(
+    fn register_function<F>(
         &mut self,
         name: impl Into<String>,
         signature: FunctionSignature,
@@ -167,7 +79,7 @@ impl Engine {
     ) where
         F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
     {
-        self.functions.register(name, signature, body);
+        self.context.register_function(name, signature, body);
         self.recompute_all();
     }
 
@@ -186,18 +98,16 @@ impl Engine {
     }
 
     pub fn set_constant(&mut self, name: impl Into<String>, value: f64) {
-        self.constants.insert(name.into(), value);
+        self.context.set_constant(name, value);
         self.recompute_all();
     }
 
-    /// Sets or edits an entry by label.
-    ///
-    /// This is the explicit editing API for existing named entries and `$n` result entries.
+    /// Sets or edits an entry by label and returns the saved execution result.
     pub fn set_entry(
         &mut self,
         label: impl AsRef<str>,
         source: impl Into<String>,
-    ) -> Result<EntryState, DagcalError> {
+    ) -> Result<Execution, DagcalError> {
         let target = EntryTarget::parse(label.as_ref())?;
         let source = source.into();
         let execution = match parse_expression(&source) {
@@ -205,57 +115,52 @@ impl Engine {
             Err(err) => self.save_parse_error(target, source, err),
         };
 
-        match execution.state {
-            EntryState::Value(_) => Ok(execution.state),
-            EntryState::Error(err) => Err(err),
+        match &execution.state {
+            EntryState::Value(_) => Ok(execution),
+            EntryState::Error(err) => Err(err.clone()),
         }
     }
 
     pub fn remove_entry(&mut self, label: &str) -> Option<EntryView> {
         let target = EntryTarget::parse(label).ok()?;
-        let id = self.id_for_target(&target)?;
-        let affected = self.collect_affected(id);
-        let removed = self.entries.remove(&id);
+        let id = self.store.id_for_target(&target)?;
+        let affected = self.recomputer.collect_affected(id);
+        let removed = self.store.remove(id);
         if removed.is_some() {
-            self.remove_name_for_id(id);
-            self.rebuild_dependency_graph();
-            self.recompute_ids(affected);
+            self.recomputer.rebuild_graph(&self.store);
+            self.recomputer
+                .recompute_ids(affected, &mut self.store, &self.context);
         }
         removed.as_ref().map(EntryView::from)
     }
 
-    pub fn get(&self, label: &str) -> Option<&EntryState> {
+    pub fn state(&self, label: &str) -> Option<&EntryState> {
         let target = EntryTarget::parse(label).ok()?;
-        self.entry_for_target(&target).map(|entry| &entry.state)
+        let id = self.store.id_for_target(&target)?;
+        self.store.state(id)
     }
 
     /// Returns the current state for an expression by its internal ID.
-    pub fn get_by_id(&self, id: ExpressionId) -> Option<&EntryState> {
-        self.entries.get(&id).map(|entry| &entry.state)
+    pub fn state_by_id(&self, id: ExpressionId) -> Option<&EntryState> {
+        self.store.state(id)
     }
 
     pub fn entry(&self, label: &str) -> Option<EntryView> {
         let target = EntryTarget::parse(label).ok()?;
-        self.entry_for_target(&target).map(EntryView::from)
+        self.store.entry_view_for_target(&target)
     }
 
     /// Returns a stored expression by its internal ID.
     pub fn entry_by_id(&self, id: ExpressionId) -> Option<EntryView> {
-        self.entries.get(&id).map(EntryView::from)
+        self.store.entry_view(id)
     }
 
     pub fn entries(&self) -> Vec<EntryView> {
-        let mut entries = self
-            .entries
-            .values()
-            .map(EntryView::from)
-            .collect::<Vec<_>>();
-        entries.sort_by_key(|entry| entry.id);
-        entries
+        self.store.entries()
     }
 
     pub fn cycle_diagnostics(&self) -> CycleDiagnostics {
-        let report = self.dependency_graph.cycle_report();
+        let report = self.recomputer.cycle_report();
 
         CycleDiagnostics {
             cycles: report
@@ -272,21 +177,14 @@ impl Engine {
         let ast = self
             .resolve_expr(parse_expression(source)?)
             .map_err(DagcalError::Eval)?;
-        self.eval_resolved_expr(&ast).map_err(DagcalError::Eval)
+        self.context
+            .eval_expr(&ast, &self.store)
+            .map_err(DagcalError::Eval)
     }
 
     fn recompute_all(&mut self) {
-        let ids = self.entries.keys().copied().collect::<BTreeSet<_>>();
-        self.recompute_ids(ids);
-    }
-
-    fn allocate_id(&mut self) -> ExpressionId {
-        loop {
-            let id = self.id_generator.next();
-            if !self.entries.contains_key(&id) {
-                return id;
-            }
-        }
+        self.recomputer
+            .recompute_all(&mut self.store, &self.context);
     }
 
     fn save_parsed_entry(
@@ -295,20 +193,12 @@ impl Engine {
         source: String,
         ast: ParsedExpr,
     ) -> Execution {
-        let (id, name) = self.resolve_or_create_id(target);
+        let (id, name) = self.store.resolve_or_create_id(target);
         let entry = match self.resolve_expr(ast) {
             Ok(ast) => Entry::from_resolved(id, name, source, ast),
             Err(err) => Entry::from_parse_error(id, name, source, DagcalError::Eval(err)),
         };
-        self.entries.insert(id, entry);
-        self.rebuild_dependency_graph();
-        self.recompute_affected(&id);
-
-        Execution {
-            id: Some(id),
-            label: Some(EntryLabel::result(id.value())),
-            state: self.entries[&id].state.clone(),
-        }
+        self.save_entry(id, entry)
     }
 
     fn save_parse_error(
@@ -317,199 +207,35 @@ impl Engine {
         source: String,
         err: DagcalError,
     ) -> Execution {
-        let (id, name) = self.resolve_or_create_id(target);
+        let (id, name) = self.store.resolve_or_create_id(target);
         let entry = Entry::from_parse_error(id, name, source, err);
-        self.entries.insert(id, entry);
-        self.rebuild_dependency_graph();
-        self.recompute_affected(&id);
+        self.save_entry(id, entry)
+    }
+
+    fn save_entry(&mut self, id: ExpressionId, entry: Entry) -> Execution {
+        self.store.insert(id, entry);
+        self.recomputer.rebuild_graph(&self.store);
+        self.recomputer
+            .recompute_affected(id, &mut self.store, &self.context);
 
         Execution {
             id: Some(id),
             label: Some(EntryLabel::result(id.value())),
-            state: self.entries[&id].state.clone(),
+            state: self
+                .store
+                .state(id)
+                .expect("saved entry should exist")
+                .clone(),
         }
     }
 
-    fn recompute_affected(&mut self, id: &ExpressionId) {
-        let affected = self.collect_affected(*id);
-        self.recompute_ids(affected);
-    }
-
-    fn collect_affected(&self, id: ExpressionId) -> BTreeSet<ExpressionId> {
-        self.dependency_graph.affected_by(id)
-    }
-
-    fn recompute_ids(&mut self, ids: BTreeSet<ExpressionId>) {
-        let analysis = self.dependency_graph.analyze(&ids);
-        let cycle_nodes = analysis.cycle_report.cycle_nodes;
-
-        for id in ids.intersection(&cycle_nodes) {
-            if let Some(entry) = self.entries.get_mut(id) {
-                entry.state = EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(
-                    entry.label.to_string(),
-                )));
-            }
-        }
-
-        for current in analysis.evaluation_order {
-            if cycle_nodes.contains(&current) {
-                continue;
-            }
-
-            let state = self.evaluate_entry(&current);
-            if let Some(entry) = self.entries.get_mut(&current) {
-                entry.state = state;
-            }
-        }
-    }
-
-    fn evaluate_entry(&self, id: &ExpressionId) -> EntryState {
-        let Some(entry) = self.entries.get(id) else {
-            return EntryState::Error(DagcalError::Eval(EvalError::UnknownReference(
-                self.label_for_id(*id),
-            )));
-        };
-
-        let Some(ast) = &entry.ast else {
-            return entry.state.clone();
-        };
-
-        let result = self.eval_resolved_expr(ast);
-
-        match result {
-            Ok(value) => EntryState::Value(value),
-            Err(err) => EntryState::Error(DagcalError::Eval(err)),
-        }
-    }
-
-    fn eval_resolved_expr(&self, ast: &ResolvedExpr) -> Result<f64, EvalError> {
-        let mut resolve_entry = |id| self.resolve_entry_reference(id);
-        let mut resolve_constant = |name: &str| {
-            self.constants
-                .get(name)
-                .copied()
-                .ok_or_else(|| EvalError::UnknownReference(name.to_string()))
-        };
-        eval_expr(
-            ast,
-            &self.functions,
-            &mut resolve_entry,
-            &mut resolve_constant,
-        )
-    }
-
-    fn resolve_entry_reference(&self, id: ExpressionId) -> Result<f64, EvalError> {
-        if let Some(entry) = self.entries.get(&id) {
-            match &entry.state {
-                EntryState::Value(value) => Ok(*value),
-                EntryState::Error(_) => Err(EvalError::DependencyError(self.label_for_id(id))),
-            }
-        } else {
-            Err(EvalError::UnknownReference(format!("${}", id.value())))
-        }
-    }
-
-    fn entry_for_target(&self, target: &EntryTarget) -> Option<&Entry> {
-        self.id_for_target(target)
-            .and_then(|id| self.entries.get(&id))
-    }
-
-    fn rebuild_dependency_graph(&mut self) {
-        self.dependency_graph.rebuild(
-            self.entries
-                .iter()
-                .map(|(id, entry)| (*id, entry.references.clone())),
-        );
-    }
-
-    fn resolve_expr(&self, expr: ParsedExpr) -> Result<ResolvedExpr, EvalError> {
-        match expr {
-            ParsedExpr::Number(value) => Ok(ResolvedExpr::Number(value)),
-            ParsedExpr::Reference(reference) => self.resolve_parsed_reference(reference),
-            ParsedExpr::Unary { op, rhs } => Ok(ResolvedExpr::Unary {
-                op,
-                rhs: Box::new(self.resolve_expr(*rhs)?),
-            }),
-            ParsedExpr::Binary { lhs, op, rhs } => Ok(ResolvedExpr::Binary {
-                lhs: Box::new(self.resolve_expr(*lhs)?),
-                op,
-                rhs: Box::new(self.resolve_expr(*rhs)?),
-            }),
-            ParsedExpr::Call { name, args } => Ok(ResolvedExpr::Call {
-                name,
-                args: args
-                    .into_iter()
-                    .map(|arg| self.resolve_expr(arg))
-                    .collect::<Result<Vec<_>, _>>()?,
-            }),
-        }
-    }
-
-    fn resolve_parsed_reference(
-        &self,
-        reference: ParsedReference,
-    ) -> Result<ResolvedExpr, EvalError> {
-        match reference {
-            ParsedReference::Id(id) => Ok(ResolvedExpr::EntryReference(id)),
-            ParsedReference::Name(name) => {
-                if let Some(id) = self.names.get(&name).copied() {
-                    Ok(ResolvedExpr::EntryReference(id))
-                } else if self.constants.contains_key(&name) {
-                    Ok(ResolvedExpr::Constant(name))
-                } else {
-                    Err(EvalError::UnknownReference(name))
-                }
-            }
-        }
-    }
-
-    fn resolve_or_create_id(&mut self, target: EntryTarget) -> (ExpressionId, Option<String>) {
-        match target {
-            EntryTarget::Id(id) => {
-                self.id_generator.reserve_through(id.value());
-                let name = self.entries.get(&id).and_then(|entry| entry.name.clone());
-                (id, name)
-            }
-            EntryTarget::Name(name) => {
-                if let Some(id) = self.names.get(&name).copied() {
-                    return (id, Some(name));
-                }
-
-                let id = self.allocate_id();
-                self.names.insert(name.clone(), id);
-                (id, Some(name))
-            }
-        }
-    }
-
-    fn label_for_id(&self, id: ExpressionId) -> String {
-        self.entries
-            .get(&id)
-            .map(|entry| entry.label.to_string())
-            .unwrap_or_else(|| id.to_string())
+    fn resolve_expr(&self, expr: ParsedExpr) -> Result<crate::ast::ResolvedExpr, EvalError> {
+        Resolver::new(&self.store, self.context.constants()).resolve_expr(expr)
     }
 
     fn labels_for_ids(&self, ids: &BTreeSet<ExpressionId>) -> BTreeSet<String> {
-        ids.iter().map(|id| self.label_for_id(*id)).collect()
+        ids.iter().map(|id| self.store.label_for_id(*id)).collect()
     }
-
-    fn id_for_target(&self, target: &EntryTarget) -> Option<ExpressionId> {
-        match target {
-            EntryTarget::Id(id) => Some(*id),
-            EntryTarget::Name(name) => self.names.get(name).copied(),
-        }
-    }
-
-    fn remove_name_for_id(&mut self, id: ExpressionId) {
-        self.names.retain(|_, entry_id| *entry_id != id);
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Execution {
-    pub id: Option<ExpressionId>,
-    pub label: Option<EntryLabel>,
-    pub state: EntryState,
 }
 
 fn definition_source(input: &str, name: &str) -> String {
@@ -527,16 +253,17 @@ fn definition_source(input: &str, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::ResolvedExpr;
 
     fn assert_value(engine: &Engine, id: &str, expected: f64) {
-        match engine.get(id) {
+        match engine.state(id) {
             Some(EntryState::Value(actual)) => assert!((actual - expected).abs() < 1e-12),
             other => panic!("expected value for {id}, got {other:?}"),
         }
     }
 
     fn assert_eval_error(engine: &Engine, id: &str, matches: impl FnOnce(&EvalError) -> bool) {
-        match engine.get(id) {
+        match engine.state(id) {
             Some(EntryState::Error(DagcalError::Eval(err))) if matches(err) => {}
             other => panic!("expected eval error for {id}, got {other:?}"),
         }
@@ -715,7 +442,7 @@ mod tests {
         assert!(engine.set_entry("b", "a * 2").is_err());
 
         assert!(matches!(
-            engine.get("b"),
+            engine.state("b"),
             Some(EntryState::Error(DagcalError::Eval(
                 EvalError::DependencyError(name)
             ))) if name == "$1"
@@ -732,7 +459,7 @@ mod tests {
         assert!(engine.set_entry("b", "a + 1").is_err());
 
         assert!(matches!(
-            engine.get("a"),
+            engine.state("a"),
             Some(EntryState::Error(DagcalError::Eval(
                 EvalError::CycleDetected(_)
             )))
@@ -1036,7 +763,7 @@ mod tests {
         let entry = engine.entry(&label).unwrap();
         let id = entry.id;
 
-        assert_eq!(engine.get_by_id(id), Some(&EntryState::Value(42.0)));
+        assert_eq!(engine.state_by_id(id), Some(&EntryState::Value(42.0)));
         assert_eq!(engine.entry_by_id(id).unwrap().label.to_string(), "$1");
     }
 
@@ -1062,7 +789,7 @@ mod tests {
         engine.set_entry("taxed", "subtotal * 1.1").unwrap();
 
         let taxed_id = engine.entry("taxed").unwrap().id;
-        let taxed = engine.entries.get(&taxed_id).unwrap();
+        let taxed = engine.store.raw_entry(taxed_id).unwrap();
 
         assert_eq!(taxed.references, BTreeSet::from([subtotal_id]));
         assert!(matches!(
@@ -1129,7 +856,7 @@ mod tests {
         assert!(engine.set_entry("x", "triple(14)").is_err());
         engine.register_fixed_function("triple", 1, |args| Ok(args[0] * 3.0));
 
-        assert_eq!(engine.get("x"), Some(&EntryState::Value(42.0)));
+        assert_eq!(engine.state("x"), Some(&EntryState::Value(42.0)));
     }
 
     #[test]
@@ -1139,7 +866,7 @@ mod tests {
         assert!(engine.set_entry("x", "product(2, 3, 4)").is_err());
         engine.register_variadic_function("product", 0, |args| Ok(args.iter().product()));
 
-        assert_eq!(engine.get("x"), Some(&EntryState::Value(24.0)));
+        assert_eq!(engine.state("x"), Some(&EntryState::Value(24.0)));
     }
 
     #[test]
@@ -1152,7 +879,7 @@ mod tests {
         engine.set_constant("tau", std::f64::consts::TAU);
 
         assert_eq!(
-            engine.get("area"),
+            engine.state("area"),
             Some(&EntryState::Value(std::f64::consts::TAU * 2.0))
         );
     }

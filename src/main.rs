@@ -111,7 +111,7 @@ impl Repl {
 
     fn set_and_print(&mut self, id: &str, source: &str) {
         match self.engine.set_entry(id, source) {
-            Ok(state) => print_state(id, &state),
+            Ok(execution) => print_state(id, &execution.state),
             Err(err) => println!("{id} = error: {err}"),
         }
     }
