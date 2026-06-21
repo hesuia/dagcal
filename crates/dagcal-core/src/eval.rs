@@ -11,37 +11,57 @@ pub(crate) fn eval_expr(
 ) -> Result<f64, EvalError> {
     match expr {
         ResolvedExpr::Number(value) => Ok(*value),
-        ResolvedExpr::EntryReference(id) => resolve_entry(*id),
-        ResolvedExpr::Constant(name) => resolve_constant(name),
+        ResolvedExpr::EntryReference(id) => finite_value(resolve_entry(*id)?, || {
+            format!("reference `${}` produced non-finite result", id.value())
+        }),
+        ResolvedExpr::Constant(name) => finite_value(resolve_constant(name)?, || {
+            format!("constant `{name}` produced non-finite result")
+        }),
         ResolvedExpr::Unary { op, rhs } => {
             let rhs = eval_expr(rhs, functions, resolve_entry, resolve_constant)?;
             match op {
-                UnaryOp::Plus => Ok(rhs),
-                UnaryOp::Minus => Ok(-rhs),
+                UnaryOp::Plus => finite_value(rhs, || {
+                    "unary plus operation produced non-finite result".to_string()
+                }),
+                UnaryOp::Minus => finite_value(-rhs, || {
+                    "unary minus operation produced non-finite result".to_string()
+                }),
             }
         }
         ResolvedExpr::Binary { lhs, op, rhs } => {
             let lhs = eval_expr(lhs, functions, resolve_entry, resolve_constant)?;
             let rhs = eval_expr(rhs, functions, resolve_entry, resolve_constant)?;
             match op {
-                BinaryOp::Add => Ok(lhs + rhs),
-                BinaryOp::Sub => Ok(lhs - rhs),
-                BinaryOp::Mul => Ok(lhs * rhs),
+                BinaryOp::Add => finite_value(lhs + rhs, || {
+                    "addition operation produced non-finite result".to_string()
+                }),
+                BinaryOp::Sub => finite_value(lhs - rhs, || {
+                    "subtraction operation produced non-finite result".to_string()
+                }),
+                BinaryOp::Mul => finite_value(lhs * rhs, || {
+                    "multiplication operation produced non-finite result".to_string()
+                }),
                 BinaryOp::Div => {
                     if rhs == 0.0 {
                         Err(EvalError::DivisionByZero)
                     } else {
-                        Ok(lhs / rhs)
+                        finite_value(lhs / rhs, || {
+                            "division operation produced non-finite result".to_string()
+                        })
                     }
                 }
                 BinaryOp::Rem => {
                     if rhs == 0.0 {
                         Err(EvalError::RemainderByZero)
                     } else {
-                        Ok(lhs % rhs)
+                        finite_value(lhs % rhs, || {
+                            "remainder operation produced non-finite result".to_string()
+                        })
                     }
                 }
-                BinaryOp::Pow => finite_operator_result("power", lhs.powf(rhs)),
+                BinaryOp::Pow => finite_value(lhs.powf(rhs), || {
+                    "power operation produced non-finite result".to_string()
+                }),
             }
         }
         ResolvedExpr::Call { name, args } => {
@@ -60,18 +80,21 @@ pub(crate) fn eval_expr(
             for arg in args {
                 evaluated_args.push(eval_expr(arg, functions, resolve_entry, resolve_constant)?);
             }
-            function.call(&evaluated_args)
+            finite_value(function.call(&evaluated_args)?, || {
+                format!("function `{name}` produced non-finite result")
+            })
         }
     }
 }
 
-fn finite_operator_result(name: &str, value: f64) -> Result<f64, EvalError> {
+fn finite_value<F>(value: f64, message: F) -> Result<f64, EvalError>
+where
+    F: FnOnce() -> String,
+{
     if value.is_finite() {
         Ok(value)
     } else {
-        Err(EvalError::Math(format!(
-            "{name} operation produced non-finite result"
-        )))
+        Err(EvalError::Math(message()))
     }
 }
 
@@ -200,6 +223,16 @@ mod tests {
                 op: BinaryOp::Pow,
                 rhs: Box::new(ResolvedExpr::Number(2.0)),
             },
+            "1e308 + 1e308" => ResolvedExpr::Binary {
+                lhs: Box::new(ResolvedExpr::Number(1e308)),
+                op: BinaryOp::Add,
+                rhs: Box::new(ResolvedExpr::Number(1e308)),
+            },
+            "1e308 * 1e308" => ResolvedExpr::Binary {
+                lhs: Box::new(ResolvedExpr::Number(1e308)),
+                op: BinaryOp::Mul,
+                rhs: Box::new(ResolvedExpr::Number(1e308)),
+            },
             _ => panic!("missing test expression fixture for {source}"),
         }
     }
@@ -313,6 +346,58 @@ mod tests {
             eval_standard("1e308 ^ 2"),
             Err(EvalError::Math(message))
                 if message == "power operation produced non-finite result"
+        ));
+        assert!(matches!(
+            eval_standard("1e308 + 1e308"),
+            Err(EvalError::Math(message))
+                if message == "addition operation produced non-finite result"
+        ));
+        assert!(matches!(
+            eval_standard("1e308 * 1e308"),
+            Err(EvalError::Math(message))
+                if message == "multiplication operation produced non-finite result"
+        ));
+    }
+
+    #[test]
+    fn standardizes_non_finite_constants_references_and_custom_functions() {
+        let mut functions = FunctionRegistry::new();
+        functions.register("explode", FunctionSignature::exact(0), |_| {
+            Ok(f64::INFINITY)
+        });
+
+        assert!(matches!(
+            eval_with_refs(
+                &ResolvedExpr::Constant("bad".to_string()),
+                &[],
+                &[("bad", f64::NAN)],
+                &functions
+            ),
+            Err(EvalError::Math(message))
+                if message == "constant `bad` produced non-finite result"
+        ));
+        assert!(matches!(
+            eval_with_refs(
+                &ResolvedExpr::EntryReference(ExpressionId::new(9)),
+                &[(ExpressionId::new(9), f64::INFINITY)],
+                &[],
+                &functions
+            ),
+            Err(EvalError::Math(message))
+                if message == "reference `$9` produced non-finite result"
+        ));
+        assert!(matches!(
+            eval_with_refs(
+                &ResolvedExpr::Call {
+                    name: "explode".to_string(),
+                    args: vec![],
+                },
+                &[],
+                &[],
+                &functions
+            ),
+            Err(EvalError::Math(message))
+                if message == "function `explode` produced non-finite result"
         ));
     }
 
