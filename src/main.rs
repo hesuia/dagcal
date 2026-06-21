@@ -125,7 +125,7 @@ impl Repl {
         }
 
         for entry in entries {
-            print!("{} = {} => ", entry.label, entry.source);
+            print!("{} = {} => ", entry.id, entry.source);
             print_state_value(&entry.state);
         }
     }
@@ -149,8 +149,8 @@ fn print_state(id: &str, state: &EntryState) {
 }
 
 fn print_execution(execution: &Execution) {
-    match &execution.label {
-        Some(label) => print_state(&label.to_string(), &execution.state),
+    match execution.id {
+        Some(id) => print_state(&id.to_string(), &execution.state),
         None => print_state_value(&execution.state),
     }
 }

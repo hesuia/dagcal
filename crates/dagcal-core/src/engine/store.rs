@@ -125,10 +125,8 @@ impl EntryStore {
             .map(|(id, entry)| (*id, entry.references.clone()))
     }
 
-    pub(super) fn label_for_id(&self, id: ExpressionId) -> String {
-        self.entry(id)
-            .map(|entry| entry.label.to_string())
-            .unwrap_or_else(|| id.to_string())
+    pub(super) fn display_name_for_id(&self, id: ExpressionId) -> String {
+        id.to_string()
     }
 
     #[cfg(test)]

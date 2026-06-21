@@ -18,7 +18,7 @@ impl ExpressionId {
 
 impl fmt::Display for ExpressionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Expression_{}", self.0)
+        write!(f, "${}", self.0)
     }
 }
 
@@ -49,5 +49,16 @@ impl ExpressionIdGenerator {
     /// Ensures future allocations are greater than or equal to `value + 1`.
     pub fn reserve_through(&mut self, value: usize) {
         self.next = self.next.max(value + 1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expression_id_displays_as_dollar_result_reference() {
+        assert_eq!(ExpressionId::new(1).to_string(), "$1");
+        assert_eq!(ExpressionId::new(42).to_string(), "$42");
     }
 }

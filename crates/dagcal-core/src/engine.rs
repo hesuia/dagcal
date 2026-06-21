@@ -15,7 +15,6 @@ use crate::ast::{ParsedExpr, ParsedStatement};
 use crate::error::{DagcalError, EvalError};
 use crate::function::FunctionSignature;
 use crate::id::ExpressionId;
-use crate::label::EntryLabel;
 use crate::parser::{parse_expression, parse_statement};
 use std::collections::BTreeSet;
 
@@ -65,7 +64,6 @@ impl Engine {
             }
             Err(err) => Execution {
                 id: None,
-                label: None,
                 state: EntryState::Error(err),
             },
         }
@@ -102,13 +100,13 @@ impl Engine {
         self.recompute_all();
     }
 
-    /// Sets or edits an entry by label and returns the saved execution result.
+    /// Sets or edits an entry by `$n` result reference or name and returns the saved result.
     pub fn set_entry(
         &mut self,
-        label: impl AsRef<str>,
+        target: impl AsRef<str>,
         source: impl Into<String>,
     ) -> Result<Execution, DagcalError> {
-        let target = EntryTarget::parse(label.as_ref())?;
+        let target = EntryTarget::parse(target.as_ref())?;
         let source = source.into();
         let execution = match parse_expression(&source) {
             Ok(ast) => self.save_parsed_entry(target, source, ast),
@@ -121,8 +119,8 @@ impl Engine {
         }
     }
 
-    pub fn remove_entry(&mut self, label: &str) -> Option<EntryView> {
-        let target = EntryTarget::parse(label).ok()?;
+    pub fn remove_entry(&mut self, target: &str) -> Option<EntryView> {
+        let target = EntryTarget::parse(target).ok()?;
         let id = self.store.id_for_target(&target)?;
         let affected = self.recomputer.collect_affected(id);
         let removed = self.store.remove(id);
@@ -134,8 +132,8 @@ impl Engine {
         removed.as_ref().map(EntryView::from)
     }
 
-    pub fn state(&self, label: &str) -> Option<&EntryState> {
-        let target = EntryTarget::parse(label).ok()?;
+    pub fn state(&self, target: &str) -> Option<&EntryState> {
+        let target = EntryTarget::parse(target).ok()?;
         let id = self.store.id_for_target(&target)?;
         self.store.state(id)
     }
@@ -145,8 +143,8 @@ impl Engine {
         self.store.state(id)
     }
 
-    pub fn entry(&self, label: &str) -> Option<EntryView> {
-        let target = EntryTarget::parse(label).ok()?;
+    pub fn entry(&self, target: &str) -> Option<EntryView> {
+        let target = EntryTarget::parse(target).ok()?;
         self.store.entry_view_for_target(&target)
     }
 
@@ -166,10 +164,10 @@ impl Engine {
             cycles: report
                 .cycles
                 .into_iter()
-                .map(|cycle| self.labels_for_ids(&cycle))
+                .map(|cycle| self.display_names_for_ids(&cycle))
                 .collect(),
-            cycle_nodes: self.labels_for_ids(&report.cycle_nodes),
-            dependent_nodes: self.labels_for_ids(&report.dependent_nodes),
+            cycle_nodes: self.display_names_for_ids(&report.cycle_nodes),
+            dependent_nodes: self.display_names_for_ids(&report.dependent_nodes),
         }
     }
 
@@ -220,7 +218,6 @@ impl Engine {
 
         Execution {
             id: Some(id),
-            label: Some(EntryLabel::result(id.value())),
             state: self
                 .store
                 .state(id)
@@ -233,8 +230,10 @@ impl Engine {
         Resolver::new(&self.store, self.context.constants()).resolve_expr(expr)
     }
 
-    fn labels_for_ids(&self, ids: &BTreeSet<ExpressionId>) -> BTreeSet<String> {
-        ids.iter().map(|id| self.store.label_for_id(*id)).collect()
+    fn display_names_for_ids(&self, ids: &BTreeSet<ExpressionId>) -> BTreeSet<String> {
+        ids.iter()
+            .map(|id| self.store.display_name_for_id(*id))
+            .collect()
     }
 }
 
@@ -269,11 +268,11 @@ mod tests {
         }
     }
 
-    fn execution_label(execution: &Execution) -> String {
+    fn execution_id_display(execution: &Execution) -> String {
         execution
-            .label
+            .id
             .as_ref()
-            .expect("expected saved execution label")
+            .expect("expected saved execution id")
             .to_string()
     }
 
@@ -620,9 +619,9 @@ mod tests {
         let subtotal = engine.execute("subtotal = 100");
         let taxed = engine.execute("subtotal * 1.1");
 
-        assert_eq!(execution_label(&subtotal), "$1");
+        assert_eq!(execution_id_display(&subtotal), "$1");
         assert_eq!(subtotal.state, EntryState::Value(100.0));
-        assert_eq!(execution_label(&taxed), "$2");
+        assert_eq!(execution_id_display(&taxed), "$2");
         assert_eq!(taxed.state, EntryState::Value(110.00000000000001));
         assert_eq!(engine.entry("subtotal").unwrap().source, "100");
         assert_eq!(engine.entry("$1").unwrap().source, "100");
@@ -635,7 +634,7 @@ mod tests {
 
         let execution = engine.execute("$1 = 100");
 
-        assert!(execution.label.is_none());
+        assert!(execution.id.is_none());
         assert!(matches!(
             execution.state,
             EntryState::Error(DagcalError::Parse(_))
@@ -650,8 +649,8 @@ mod tests {
         let first = engine.execute("1 + 2");
         let second = engine.execute("$1 * 10");
 
-        assert_eq!(execution_label(&first), "$1");
-        assert_eq!(execution_label(&second), "$2");
+        assert_eq!(execution_id_display(&first), "$1");
+        assert_eq!(execution_id_display(&second), "$2");
         assert_eq!(first.state, EntryState::Value(3.0));
         assert_eq!(second.state, EntryState::Value(30.0));
         assert_value(&engine, "$2", 30.0);
@@ -680,11 +679,11 @@ mod tests {
         let fourth = engine.execute("$2 + $3 + sin(pi / 2)");
         let fifth = engine.execute("$4 / ($2 - 5)");
 
-        assert_eq!(execution_label(&first), "$1");
-        assert_eq!(execution_label(&second), "$2");
-        assert_eq!(execution_label(&third), "$3");
-        assert_eq!(execution_label(&fourth), "$4");
-        assert_eq!(execution_label(&fifth), "$5");
+        assert_eq!(execution_id_display(&first), "$1");
+        assert_eq!(execution_id_display(&second), "$2");
+        assert_eq!(execution_id_display(&third), "$3");
+        assert_eq!(execution_id_display(&fourth), "$4");
+        assert_eq!(execution_id_display(&fifth), "$5");
         assert_value(&engine, "$2", 5.0);
         assert_value(&engine, "$3", 10.0);
         assert_value(&engine, "$4", 16.0);
@@ -727,7 +726,7 @@ mod tests {
 
         let sixth = engine.execute("$5 + $3");
 
-        assert_eq!(execution_label(&sixth), "$6");
+        assert_eq!(execution_id_display(&sixth), "$6");
         assert_eq!(sixth.state, EntryState::Value(50.2));
         assert_value(&engine, "$6", 50.2);
     }
@@ -739,7 +738,7 @@ mod tests {
         engine.set_entry("$1", "100").unwrap();
         let execution = engine.execute("$1 + 1");
 
-        assert_eq!(execution_label(&execution), "$2");
+        assert_eq!(execution_id_display(&execution), "$2");
         assert_eq!(execution.state, EntryState::Value(101.0));
     }
 
@@ -750,7 +749,7 @@ mod tests {
         engine.set_entry("$5", "100").unwrap();
         let execution = engine.execute("$5 + 1");
 
-        assert_eq!(execution_label(&execution), "$6");
+        assert_eq!(execution_id_display(&execution), "$6");
         assert_eq!(execution.state, EntryState::Value(101.0));
     }
 
@@ -759,12 +758,12 @@ mod tests {
         let mut engine = Engine::new();
 
         let execution = engine.execute("40 + 2");
-        let label = execution_label(&execution);
-        let entry = engine.entry(&label).unwrap();
+        let id_display = execution_id_display(&execution);
+        let entry = engine.entry(&id_display).unwrap();
         let id = entry.id;
 
         assert_eq!(engine.state_by_id(id), Some(&EntryState::Value(42.0)));
-        assert_eq!(engine.entry_by_id(id).unwrap().label.to_string(), "$1");
+        assert_eq!(engine.entry_by_id(id).unwrap().id.to_string(), "$1");
     }
 
     #[test]
@@ -824,7 +823,7 @@ mod tests {
             .into_iter()
             .map(|entry| {
                 (
-                    entry.label.to_string(),
+                    entry.id.to_string(),
                     entry.source.clone(),
                     entry.state.clone(),
                 )

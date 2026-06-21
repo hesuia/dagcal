@@ -1,7 +1,6 @@
 use crate::ast::{BinaryOp, ParsedExpr, ParsedReference, ParsedStatement, UnaryOp};
 use crate::error::DagcalError;
 use crate::id::ExpressionId;
-use crate::label::EntryLabel;
 use pest::Parser;
 use pest::iterators::Pair;
 use pest_derive::Parser;
@@ -50,7 +49,7 @@ fn build_definition(pair: Pair<'_, Rule>) -> Result<ParsedStatement, DagcalError
         .ok_or_else(|| DagcalError::Parse("expected definition expression".to_string()))?;
 
     Ok(ParsedStatement::Definition {
-        name: EntryLabel::named(name.as_str())?.to_string(),
+        name: name.as_str().to_string(),
         expr: build_expr(expr)?,
     })
 }

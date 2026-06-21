@@ -1,18 +1,18 @@
 use dagcal_core::{DagcalError, Engine, EntryState, EvalError};
 
-fn assert_value(engine: &Engine, label: &str, expected: f64) {
-    match engine.state(label) {
+fn assert_value(engine: &Engine, target: &str, expected: f64) {
+    match engine.state(target) {
         Some(EntryState::Value(actual)) => {
             assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
         }
-        other => panic!("expected value for {label}, got {other:?}"),
+        other => panic!("expected value for {target}, got {other:?}"),
     }
 }
 
-fn assert_eval_error(engine: &Engine, label: &str, matches: impl FnOnce(&EvalError) -> bool) {
-    match engine.state(label) {
+fn assert_eval_error(engine: &Engine, target: &str, matches: impl FnOnce(&EvalError) -> bool) {
+    match engine.state(target) {
         Some(EntryState::Error(DagcalError::Eval(err))) if matches(err) => {}
-        other => panic!("expected eval error for {label}, got {other:?}"),
+        other => panic!("expected eval error for {target}, got {other:?}"),
     }
 }
 
@@ -25,12 +25,12 @@ fn user_session_supports_definitions_results_edits_and_recovery() {
     let tax = engine.execute("subtotal * tax_rate");
     let total = engine.execute("subtotal + $3");
 
-    assert_eq!(subtotal.label.unwrap().to_string(), "$1");
+    assert_eq!(subtotal.id.unwrap().to_string(), "$1");
     assert_eq!(subtotal.state, EntryState::Value(100.0));
-    assert_eq!(tax_rate.label.unwrap().to_string(), "$2");
+    assert_eq!(tax_rate.id.unwrap().to_string(), "$2");
     assert_eq!(tax_rate.state, EntryState::Value(0.1));
-    assert_eq!(tax.label.unwrap().to_string(), "$3");
-    assert_eq!(total.label.unwrap().to_string(), "$4");
+    assert_eq!(tax.id.unwrap().to_string(), "$3");
+    assert_eq!(total.id.unwrap().to_string(), "$4");
     assert_value(&engine, "$1", 100.0);
     assert_value(&engine, "$3", 10.0);
     assert_value(&engine, "$4", 110.0);
@@ -70,7 +70,7 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
     let dependent = engine.execute("a + base");
 
     assert_eq!(valid.state, EntryState::Value(10.0));
-    assert!(parse_error.label.is_none());
+    assert!(parse_error.id.is_none());
     assert!(matches!(
         parse_error.state,
         EntryState::Error(DagcalError::Parse(_))
@@ -83,7 +83,7 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
             EvalError::CycleDetected(_)
         )))
     ));
-    assert_eq!(dependent.label.unwrap().to_string(), "$4");
+    assert_eq!(dependent.id.unwrap().to_string(), "$4");
     assert_eval_error(
         &engine,
         "$4",
@@ -100,8 +100,8 @@ fn public_api_supports_runtime_extensions_used_by_frontends() {
     engine.set_constant("tau", 6.0);
     let before_constant = engine.execute("tau / 2");
 
-    assert_eq!(before_function.label.unwrap().to_string(), "$1");
-    assert_eq!(before_constant.label.unwrap().to_string(), "$2");
+    assert_eq!(before_function.id.unwrap().to_string(), "$1");
+    assert_eq!(before_constant.id.unwrap().to_string(), "$2");
     assert_eval_error(
         &engine,
         "$1",
@@ -123,8 +123,8 @@ fn public_api_exposes_entries_for_frontend_state_rendering() {
     engine.execute("subtotal = 120");
     engine.execute("tax = subtotal * 0.1");
     let total = engine.execute("subtotal + tax");
-    let total_label = total.label.unwrap().to_string();
-    let total_id = engine.entry(&total_label).unwrap().id;
+    let total_id_display = total.id.unwrap().to_string();
+    let total_id = engine.entry(&total_id_display).unwrap().id;
 
     assert_eq!(
         engine.state_by_id(total_id),
@@ -136,7 +136,7 @@ fn public_api_exposes_entries_for_frontend_state_rendering() {
         .into_iter()
         .map(|entry| {
             (
-                entry.label.to_string(),
+                entry.id.to_string(),
                 entry.source.clone(),
                 entry.state.clone(),
             )
@@ -173,9 +173,9 @@ fn public_api_keeps_numbered_results_stable_across_removal_and_append() {
     let second = engine.execute("$1 + 3");
     let third = engine.execute("$1 * $2");
 
-    assert_eq!(first.label.unwrap().to_string(), "$1");
-    assert_eq!(second.label.unwrap().to_string(), "$2");
-    assert_eq!(third.label.unwrap().to_string(), "$3");
+    assert_eq!(first.id.unwrap().to_string(), "$1");
+    assert_eq!(second.id.unwrap().to_string(), "$2");
+    assert_eq!(third.id.unwrap().to_string(), "$3");
     assert_value(&engine, "$3", 10.0);
 
     engine.remove_entry("$2");
@@ -186,7 +186,7 @@ fn public_api_keeps_numbered_results_stable_across_removal_and_append() {
     );
 
     let fourth = engine.execute("$1 + 10");
-    assert_eq!(fourth.label.unwrap().to_string(), "$4");
+    assert_eq!(fourth.id.unwrap().to_string(), "$4");
     assert_value(&engine, "$4", 12.0);
 
     engine.set_entry("$2", "$1 + 4").unwrap();

@@ -73,7 +73,7 @@ fn resolve_entry_reference(id: ExpressionId, store: &EntryStore) -> Result<f64, 
     if let Some(entry) = store.entry(id) {
         match &entry.state {
             EntryState::Value(value) => Ok(*value),
-            EntryState::Error(_) => Err(EvalError::DependencyError(store.label_for_id(id))),
+            EntryState::Error(_) => Err(EvalError::DependencyError(store.display_name_for_id(id))),
         }
     } else {
         Err(EvalError::UnknownReference(format!("${}", id.value())))

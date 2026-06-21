@@ -61,7 +61,7 @@ impl Recomputer {
         for id in ids.intersection(&cycle_nodes) {
             if let Some(entry) = store.entry_mut(*id) {
                 entry.state = EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(
-                    entry.label.to_string(),
+                    entry.id.to_string(),
                 )));
             }
         }
@@ -82,7 +82,7 @@ impl Recomputer {
 fn evaluate_entry(id: ExpressionId, store: &EntryStore, context: &EvaluationContext) -> EntryState {
     let Some(entry) = store.entry(id) else {
         return EntryState::Error(DagcalError::Eval(EvalError::UnknownReference(
-            store.label_for_id(id),
+            store.display_name_for_id(id),
         )));
     };
 

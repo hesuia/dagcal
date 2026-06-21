@@ -5,11 +5,9 @@ mod error;
 mod eval;
 mod function;
 mod id;
-mod label;
 mod parser;
 
 pub use engine::{CycleDiagnostics, Engine, EntryState, EntryView, Execution};
 pub use error::{DagcalError, EvalError};
 pub use function::FunctionSignature;
 pub use id::ExpressionId;
-pub use label::EntryLabel;
