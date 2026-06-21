@@ -1,4 +1,4 @@
-use crate::error::DagcalError;
+use crate::error::{DagcalError, ParseError, ParseErrorKind};
 use crate::id::ExpressionId;
 
 #[derive(Debug, Clone)]
@@ -12,17 +12,25 @@ impl EntryTarget {
         if let Some(digits) = input.strip_prefix('$') {
             let index = digits
                 .parse::<usize>()
-                .map_err(|_| DagcalError::Parse(format!("invalid entry label `{input}`")))?;
+                .map_err(|_| invalid_entry_label(input))?;
             if index == 0 {
-                return Err(DagcalError::Parse(format!("invalid entry label `{input}`")));
+                return Err(invalid_entry_label(input));
             }
             Ok(Self::Id(ExpressionId::new(index)))
         } else if is_valid_name(input) {
             Ok(Self::Name(input.to_string()))
         } else {
-            Err(DagcalError::Parse(format!("invalid entry label `{input}`")))
+            Err(invalid_entry_label(input))
         }
     }
+}
+
+fn invalid_entry_label(input: &str) -> DagcalError {
+    DagcalError::Parse(ParseError::at_input(
+        ParseErrorKind::InvalidEntryTarget,
+        input,
+        format!("invalid entry label `{input}`"),
+    ))
 }
 
 fn is_valid_name(input: &str) -> bool {

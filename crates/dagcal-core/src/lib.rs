@@ -8,6 +8,6 @@ mod id;
 mod parser;
 
 pub use engine::{CycleDiagnostics, Engine, EntryState, EntryView, Execution};
-pub use error::{DagcalError, EvalError};
+pub use error::{DagcalError, EvalError, ParseError, ParseErrorKind, SourcePosition, SourceSpan};
 pub use function::FunctionSignature;
 pub use id::ExpressionId;

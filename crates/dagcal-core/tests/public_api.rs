@@ -1,4 +1,4 @@
-use dagcal_core::{DagcalError, Engine, EntryState, EvalError};
+use dagcal_core::{DagcalError, Engine, EntryState, EvalError, ParseErrorKind};
 
 fn assert_value(engine: &Engine, target: &str, expected: f64) {
     match engine.state(target) {
@@ -71,10 +71,13 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
 
     assert_eq!(valid.state, EntryState::Value(10.0));
     assert!(parse_error.id.is_none());
-    assert!(matches!(
-        parse_error.state,
-        EntryState::Error(DagcalError::Parse(_))
-    ));
+    match parse_error.state {
+        EntryState::Error(DagcalError::Parse(err)) => {
+            assert_eq!(err.kind, ParseErrorKind::Syntax);
+            assert!(err.span.is_some());
+        }
+        other => panic!("expected parse error, got {other:?}"),
+    }
     assert_eq!(cycle_a.state, EntryState::Value(1.0));
     assert_eq!(cycle_b.state, EntryState::Value(2.0));
     assert!(matches!(
@@ -90,6 +93,25 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
         |err| matches!(err, EvalError::DependencyError(name) if name == "$2"),
     );
     assert_value(&engine, "base", 10.0);
+}
+
+#[test]
+fn public_api_reports_invalid_entry_targets_as_structured_parse_errors() {
+    let mut engine = Engine::new();
+
+    let err = engine.set_entry("$0", "1").unwrap_err();
+
+    match err {
+        DagcalError::Parse(err) => {
+            assert_eq!(err.kind, ParseErrorKind::InvalidEntryTarget);
+            let span = err.span.unwrap();
+            assert_eq!(span.start.byte, 0);
+            assert_eq!(span.start.line, 1);
+            assert_eq!(span.start.column, 1);
+            assert_eq!(span.end.byte, 2);
+        }
+        other => panic!("expected parse error, got {other:?}"),
+    }
 }
 
 #[test]
