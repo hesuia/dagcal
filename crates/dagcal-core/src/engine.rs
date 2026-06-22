@@ -10,13 +10,14 @@ use self::entry::Entry;
 use self::recompute::Recomputer;
 use self::resolver::resolve_expr;
 use self::store::EntryStore;
-use self::target::EntryTarget;
+use self::target::{EntryTarget, is_valid_name};
 use crate::ast::{ParsedExpr, ParsedStatement};
-use crate::error::{DagcalError, EvalError};
+use crate::error::{DagcalError, EvalError, PersistenceError};
 use crate::function::FunctionSignature;
 use crate::id::ExpressionId;
 use crate::parser::{parse_expression, parse_statement};
-use std::collections::BTreeSet;
+use crate::persistence::{ENGINE_SNAPSHOT_VERSION, EngineSnapshot, PersistedEntry};
+use std::collections::{BTreeSet, HashSet};
 
 pub use self::entry::{EntryState, EntryView, Execution};
 
@@ -46,6 +47,67 @@ impl Engine {
             context: EvaluationContext::new(),
             recomputer: Recomputer::new(),
         }
+    }
+
+    pub fn snapshot(&self) -> EngineSnapshot {
+        EngineSnapshot::new(
+            self.entries()
+                .into_iter()
+                .map(|entry| PersistedEntry {
+                    id: entry.id.value(),
+                    name: entry.name,
+                    source: entry.source,
+                })
+                .collect(),
+        )
+    }
+
+    pub fn from_snapshot(snapshot: EngineSnapshot) -> Result<Self, DagcalError> {
+        let mut engine = Self::new();
+        engine.restore_snapshot(snapshot)?;
+        Ok(engine)
+    }
+
+    pub fn restore_snapshot(&mut self, snapshot: EngineSnapshot) -> Result<(), DagcalError> {
+        let entries = validate_snapshot(snapshot)?;
+        let mut restored = Self::new();
+
+        for entry in &entries {
+            restored
+                .store
+                .reserve_restored_entry(ExpressionId::new(entry.id), entry.name.as_deref());
+        }
+
+        for entry in entries {
+            let id = ExpressionId::new(entry.id);
+            let restored_entry = match parse_expression(&entry.source) {
+                Ok(ast) => match restored.resolve_expr(ast) {
+                    Ok(ast) => Entry::from_resolved(id, entry.name, entry.source, ast),
+                    Err(err) => Entry::from_parse_error(
+                        id,
+                        entry.name,
+                        entry.source,
+                        DagcalError::Eval(err),
+                    ),
+                },
+                Err(err) => Entry::from_parse_error(id, entry.name, entry.source, err),
+            };
+            restored.store.insert(id, restored_entry);
+        }
+
+        restored.recomputer.rebuild_graph(&restored.store);
+        let ids = restored
+            .store
+            .entries()
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
+        restored
+            .recomputer
+            .recompute_ids(ids, &mut restored.store, &restored.context);
+
+        *self = restored;
+        Ok(())
     }
 
     /// Executes user input as either a named definition (`name = expr`) or an expression.
@@ -259,6 +321,49 @@ fn definition_source(input: &str, name: &str) -> String {
     } else {
         input.trim().to_string()
     }
+}
+
+fn validate_snapshot(snapshot: EngineSnapshot) -> Result<Vec<PersistedEntry>, DagcalError> {
+    if snapshot.version != ENGINE_SNAPSHOT_VERSION {
+        return Err(DagcalError::Persistence(
+            PersistenceError::UnsupportedVersion {
+                actual: snapshot.version,
+                expected: ENGINE_SNAPSHOT_VERSION,
+            },
+        ));
+    }
+
+    let mut ids = HashSet::new();
+    let mut names = HashSet::new();
+
+    for entry in &snapshot.entries {
+        if entry.id == 0 {
+            return Err(DagcalError::Persistence(PersistenceError::InvalidId(
+                entry.id,
+            )));
+        }
+        if !ids.insert(entry.id) {
+            return Err(DagcalError::Persistence(PersistenceError::DuplicateId(
+                entry.id,
+            )));
+        }
+        if let Some(name) = &entry.name {
+            if !is_valid_name(name) {
+                return Err(DagcalError::Persistence(PersistenceError::InvalidName(
+                    name.clone(),
+                )));
+            }
+            if !names.insert(name.clone()) {
+                return Err(DagcalError::Persistence(PersistenceError::DuplicateName(
+                    name.clone(),
+                )));
+            }
+        }
+    }
+
+    let mut entries = snapshot.entries;
+    entries.sort_by_key(|entry| entry.id);
+    Ok(entries)
 }
 
 #[cfg(test)]

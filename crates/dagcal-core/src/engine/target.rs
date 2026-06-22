@@ -33,7 +33,7 @@ fn invalid_entry_label(input: &str) -> DagcalError {
     ))
 }
 
-fn is_valid_name(input: &str) -> bool {
+pub(super) fn is_valid_name(input: &str) -> bool {
     let mut chars = input.chars();
     let Some(first) = chars.next() else {
         return false;

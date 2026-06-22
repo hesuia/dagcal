@@ -1,4 +1,7 @@
-use dagcal_core::{DagcalError, Engine, EntryState, EvalError, ParseErrorKind};
+use dagcal_core::{
+    DagcalError, Engine, EngineSnapshot, EntryState, EvalError, ParseErrorKind, PersistedEntry,
+    PersistenceError,
+};
 
 fn assert_value(engine: &Engine, target: &str, expected: f64) {
     match engine.state(target) {
@@ -253,4 +256,156 @@ fn public_api_keeps_numbered_results_stable_across_removal_and_append() {
 
     engine.set_entry("$2", "$1 + 4").unwrap();
     assert_value(&engine, "$3", 12.0);
+}
+
+#[test]
+fn public_api_serializes_and_restores_engine_snapshots() {
+    let mut engine = Engine::new();
+
+    engine.execute("subtotal = 100");
+    engine.execute("tax_rate = 0.1");
+    engine.execute("subtotal * tax_rate");
+    engine.execute("subtotal + $3");
+
+    let json = serde_json::to_string(&engine.snapshot()).unwrap();
+    let snapshot: EngineSnapshot = serde_json::from_str(&json).unwrap();
+    let mut restored = Engine::from_snapshot(snapshot).unwrap();
+
+    assert_value(&restored, "$1", 100.0);
+    assert_value(&restored, "$2", 0.1);
+    assert_value(&restored, "$3", 10.0);
+    assert_value(&restored, "$4", 110.0);
+    assert_value(&restored, "subtotal", 100.0);
+
+    restored.set_entry("subtotal", "200").unwrap();
+    assert_value(&restored, "$3", 20.0);
+    assert_value(&restored, "$4", 220.0);
+}
+
+#[test]
+fn public_api_restore_preserves_removed_id_gaps_and_next_append_id() {
+    let mut engine = Engine::new();
+
+    engine.execute("1");
+    engine.execute("2");
+    engine.execute("3");
+    engine.remove_entry("$2");
+
+    let mut restored = Engine::from_snapshot(engine.snapshot()).unwrap();
+    let next = restored.execute("$1 + $3");
+
+    assert!(restored.entry("$2").is_none());
+    assert_eq!(next.id.unwrap().to_string(), "$4");
+    assert_value(&restored, "$4", 4.0);
+}
+
+#[test]
+fn public_api_restore_rebuilds_cycle_diagnostics() {
+    let mut engine = Engine::new();
+
+    engine.execute("a = 1");
+    engine.execute("b = 2");
+    engine.set_entry("a", "b + 1").unwrap();
+    assert!(engine.set_entry("b", "a + 1").is_err());
+
+    let restored = Engine::from_snapshot(engine.snapshot()).unwrap();
+    let diagnostics = restored.cycle_diagnostics();
+
+    assert!(matches!(
+        restored.state("a"),
+        Some(EntryState::Error(DagcalError::Eval(
+            EvalError::CycleDetected(_)
+        )))
+    ));
+    assert_eq!(
+        diagnostics.cycle_nodes,
+        ["$1".to_string(), "$2".to_string()].into_iter().collect()
+    );
+}
+
+#[test]
+fn public_api_restore_preserves_stored_parse_error_entries() {
+    let mut engine = Engine::new();
+
+    assert!(engine.set_entry("broken", "1 +").is_err());
+    let restored = Engine::from_snapshot(engine.snapshot()).unwrap();
+
+    match restored.state("broken") {
+        Some(EntryState::Error(DagcalError::Parse(err))) => {
+            assert_eq!(err.kind, ParseErrorKind::Syntax);
+        }
+        other => panic!("expected stored parse error, got {other:?}"),
+    }
+}
+
+#[test]
+fn public_api_restore_rejects_invalid_snapshots() {
+    let unsupported_version = EngineSnapshot {
+        version: 999,
+        entries: vec![],
+    };
+    assert!(matches!(
+        Engine::from_snapshot(unsupported_version),
+        Err(DagcalError::Persistence(
+            PersistenceError::UnsupportedVersion { actual: 999, .. }
+        ))
+    ));
+
+    let invalid_id = EngineSnapshot::new(vec![PersistedEntry {
+        id: 0,
+        name: None,
+        source: "1".to_string(),
+    }]);
+    assert!(matches!(
+        Engine::from_snapshot(invalid_id),
+        Err(DagcalError::Persistence(PersistenceError::InvalidId(0)))
+    ));
+
+    let duplicate_id = EngineSnapshot::new(vec![
+        PersistedEntry {
+            id: 1,
+            name: None,
+            source: "1".to_string(),
+        },
+        PersistedEntry {
+            id: 1,
+            name: None,
+            source: "2".to_string(),
+        },
+    ]);
+    assert!(matches!(
+        Engine::from_snapshot(duplicate_id),
+        Err(DagcalError::Persistence(PersistenceError::DuplicateId(1)))
+    ));
+
+    let invalid_name = EngineSnapshot::new(vec![PersistedEntry {
+        id: 1,
+        name: Some("not-valid".to_string()),
+        source: "1".to_string(),
+    }]);
+    assert!(matches!(
+        Engine::from_snapshot(invalid_name),
+        Err(DagcalError::Persistence(PersistenceError::InvalidName(
+            name
+        ))) if name == "not-valid"
+    ));
+
+    let duplicate_name = EngineSnapshot::new(vec![
+        PersistedEntry {
+            id: 1,
+            name: Some("same".to_string()),
+            source: "1".to_string(),
+        },
+        PersistedEntry {
+            id: 2,
+            name: Some("same".to_string()),
+            source: "2".to_string(),
+        },
+    ]);
+    assert!(matches!(
+        Engine::from_snapshot(duplicate_name),
+        Err(DagcalError::Persistence(PersistenceError::DuplicateName(
+            name
+        ))) if name == "same"
+    ));
 }

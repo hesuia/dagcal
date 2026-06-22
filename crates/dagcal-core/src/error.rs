@@ -11,6 +11,28 @@ pub enum DagcalError {
     /// The AST was valid, but evaluation failed.
     #[error(transparent)]
     Eval(#[from] EvalError),
+
+    /// A persisted engine snapshot could not be restored.
+    #[error("persistence error: {0}")]
+    Persistence(PersistenceError),
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum PersistenceError {
+    #[error("unsupported snapshot version {actual}; expected {expected}")]
+    UnsupportedVersion { actual: u32, expected: u32 },
+
+    #[error("entry id must be 1-based, got {0}")]
+    InvalidId(usize),
+
+    #[error("duplicate entry id ${0}")]
+    DuplicateId(usize),
+
+    #[error("invalid entry name `{0}`")]
+    InvalidName(String),
+
+    #[error("duplicate entry name `{0}`")]
+    DuplicateName(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

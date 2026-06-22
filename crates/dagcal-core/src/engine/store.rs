@@ -60,6 +60,13 @@ impl EntryStore {
         self.entries.insert(id, entry);
     }
 
+    pub(super) fn reserve_restored_entry(&mut self, id: ExpressionId, name: Option<&str>) {
+        self.id_generator.reserve_through(id.value());
+        if let Some(name) = name {
+            self.names.insert(name.to_string(), id);
+        }
+    }
+
     pub(super) fn remove(&mut self, id: ExpressionId) -> Option<Entry> {
         let removed = self.entries.remove(&id);
         if removed.is_some() {
