@@ -113,16 +113,38 @@ impl EntryStore {
         entries
     }
 
-    pub(super) fn ids(&self) -> BTreeSet<ExpressionId> {
-        self.entries.keys().copied().collect()
-    }
-
     pub(super) fn dependency_entries(
         &self,
     ) -> impl Iterator<Item = (ExpressionId, BTreeSet<ExpressionId>)> + '_ {
         self.entries
             .iter()
-            .map(|(id, entry)| (*id, entry.references.clone()))
+            .map(|(id, entry)| (*id, entry.analysis.entry_references.clone()))
+    }
+
+    pub(super) fn ids_referencing_constant(&self, name: &str) -> BTreeSet<ExpressionId> {
+        self.entries
+            .iter()
+            .filter_map(|(id, entry)| {
+                entry
+                    .analysis
+                    .constant_references
+                    .contains(name)
+                    .then_some(*id)
+            })
+            .collect()
+    }
+
+    pub(super) fn ids_referencing_function(&self, name: &str) -> BTreeSet<ExpressionId> {
+        self.entries
+            .iter()
+            .filter_map(|(id, entry)| {
+                entry
+                    .analysis
+                    .function_references
+                    .contains(name)
+                    .then_some(*id)
+            })
+            .collect()
     }
 
     pub(super) fn display_name_for_id(&self, id: ExpressionId) -> String {

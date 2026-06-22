@@ -97,27 +97,38 @@ pub enum ResolvedExpr {
     },
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ExpressionAnalysis {
+    pub(crate) entry_references: BTreeSet<ExpressionId>,
+    pub(crate) constant_references: BTreeSet<String>,
+    pub(crate) function_references: BTreeSet<String>,
+}
+
 impl ResolvedExpr {
-    pub fn references(&self) -> BTreeSet<ExpressionId> {
-        let mut refs = BTreeSet::new();
-        self.collect_references(&mut refs);
-        refs
+    pub(crate) fn analyze(&self) -> ExpressionAnalysis {
+        let mut analysis = ExpressionAnalysis::default();
+        self.collect_analysis(&mut analysis);
+        analysis
     }
 
-    fn collect_references(&self, refs: &mut BTreeSet<ExpressionId>) {
+    fn collect_analysis(&self, analysis: &mut ExpressionAnalysis) {
         match self {
-            ResolvedExpr::Number(_) | ResolvedExpr::Constant(_) => {}
+            ResolvedExpr::Number(_) => {}
+            ResolvedExpr::Constant(name) => {
+                analysis.constant_references.insert(name.clone());
+            }
             ResolvedExpr::EntryReference(id) => {
-                refs.insert(*id);
+                analysis.entry_references.insert(*id);
             }
-            ResolvedExpr::Unary { rhs, .. } => rhs.collect_references(refs),
+            ResolvedExpr::Unary { rhs, .. } => rhs.collect_analysis(analysis),
             ResolvedExpr::Binary { lhs, rhs, .. } => {
-                lhs.collect_references(refs);
-                rhs.collect_references(refs);
+                lhs.collect_analysis(analysis);
+                rhs.collect_analysis(analysis);
             }
-            ResolvedExpr::Call { args, .. } => {
+            ResolvedExpr::Call { name, args } => {
+                analysis.function_references.insert(name.clone());
                 for arg in args {
-                    arg.collect_references(refs);
+                    arg.collect_analysis(analysis);
                 }
             }
         }

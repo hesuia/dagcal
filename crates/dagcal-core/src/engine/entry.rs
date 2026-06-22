@@ -1,7 +1,6 @@
-use crate::ast::ResolvedExpr;
+use crate::ast::{ExpressionAnalysis, ResolvedExpr};
 use crate::error::{DagcalError, EvalError};
 use crate::id::ExpressionId;
-use std::collections::BTreeSet;
 
 #[derive(Debug, Clone)]
 pub(super) struct Entry {
@@ -9,7 +8,7 @@ pub(super) struct Entry {
     pub(super) name: Option<String>,
     pub(super) source: String,
     pub(super) ast: Option<ResolvedExpr>,
-    pub(super) references: BTreeSet<ExpressionId>,
+    pub(super) analysis: ExpressionAnalysis,
     pub(super) state: EntryState,
 }
 
@@ -20,12 +19,12 @@ impl Entry {
         source: String,
         ast: ResolvedExpr,
     ) -> Self {
-        let references = ast.references();
+        let analysis = ast.analyze();
         Self {
             id,
             name,
             source,
-            references,
+            analysis,
             ast: Some(ast),
             state: EntryState::Error(DagcalError::Eval(EvalError::DependencyError(
                 id.to_string(),
@@ -44,7 +43,7 @@ impl Entry {
             name,
             source,
             ast: None,
-            references: BTreeSet::new(),
+            analysis: ExpressionAnalysis::default(),
             state: EntryState::Error(err),
         }
     }

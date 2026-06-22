@@ -77,8 +77,10 @@ impl Engine {
     ) where
         F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
     {
-        self.context.register_function(name, signature, body);
-        self.recompute_all();
+        let name = name.into();
+        self.context
+            .register_function(name.clone(), signature, body);
+        self.recompute_function_references(&name);
     }
 
     pub fn register_fixed_function<F>(&mut self, name: impl Into<String>, arity: usize, body: F)
@@ -96,8 +98,9 @@ impl Engine {
     }
 
     pub fn set_constant(&mut self, name: impl Into<String>, value: f64) {
-        self.context.set_constant(name, value);
-        self.recompute_all();
+        let name = name.into();
+        self.context.set_constant(name.clone(), value);
+        self.recompute_constant_references(&name);
     }
 
     /// Sets or edits an entry by `$n` result reference or name and returns the saved result.
@@ -180,9 +183,18 @@ impl Engine {
             .map_err(DagcalError::Eval)
     }
 
-    fn recompute_all(&mut self) {
+    fn recompute_constant_references(&mut self, name: &str) {
+        let roots = self.store.ids_referencing_constant(name);
+        let affected = self.recomputer.collect_affected_from(roots);
         self.recomputer
-            .recompute_all(&mut self.store, &self.context);
+            .recompute_ids(affected, &mut self.store, &self.context);
+    }
+
+    fn recompute_function_references(&mut self, name: &str) {
+        let roots = self.store.ids_referencing_function(name);
+        let affected = self.recomputer.collect_affected_from(roots);
+        self.recomputer
+            .recompute_ids(affected, &mut self.store, &self.context);
     }
 
     fn save_parsed_entry(
@@ -253,6 +265,8 @@ fn definition_source(input: &str, name: &str) -> String {
 mod tests {
     use super::*;
     use crate::ast::ResolvedExpr;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn assert_value(engine: &Engine, id: &str, expected: f64) {
         match engine.state(id) {
@@ -790,7 +804,10 @@ mod tests {
         let taxed_id = engine.entry("taxed").unwrap().id;
         let taxed = engine.store.raw_entry(taxed_id).unwrap();
 
-        assert_eq!(taxed.references, BTreeSet::from([subtotal_id]));
+        assert_eq!(
+            taxed.analysis.entry_references,
+            BTreeSet::from([subtotal_id])
+        );
         assert!(matches!(
             taxed.ast,
             Some(ResolvedExpr::Binary { ref lhs, .. })
@@ -859,6 +876,29 @@ mod tests {
     }
 
     #[test]
+    fn registering_function_recomputes_only_function_dependents() {
+        let mut engine = Engine::new();
+        let probe_calls = Arc::new(AtomicUsize::new(0));
+        let probe_calls_for_body = Arc::clone(&probe_calls);
+
+        engine.register_fixed_function("probe", 1, move |args| {
+            probe_calls_for_body.fetch_add(1, Ordering::SeqCst);
+            Ok(args[0])
+        });
+        engine.set_entry("unrelated", "probe(5)").unwrap();
+        assert!(engine.set_entry("x", "triple(14)").is_err());
+        assert!(engine.set_entry("y", "x + 1").is_err());
+        assert_eq!(probe_calls.load(Ordering::SeqCst), 1);
+
+        engine.register_fixed_function("triple", 1, |args| Ok(args[0] * 3.0));
+
+        assert_eq!(engine.state("x"), Some(&EntryState::Value(42.0)));
+        assert_eq!(engine.state("y"), Some(&EntryState::Value(43.0)));
+        assert_eq!(engine.state("unrelated"), Some(&EntryState::Value(5.0)));
+        assert_eq!(probe_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn registering_variadic_function_recomputes_existing_entries() {
         let mut engine = Engine::new();
 
@@ -881,6 +921,37 @@ mod tests {
             engine.state("area"),
             Some(&EntryState::Value(std::f64::consts::TAU * 2.0))
         );
+    }
+
+    #[test]
+    fn setting_constant_recomputes_only_constant_dependents() {
+        let mut engine = Engine::new();
+        let probe_calls = Arc::new(AtomicUsize::new(0));
+        let probe_calls_for_body = Arc::clone(&probe_calls);
+
+        engine.register_fixed_function("probe", 1, move |args| {
+            probe_calls_for_body.fetch_add(1, Ordering::SeqCst);
+            Ok(args[0])
+        });
+        engine.set_entry("unrelated", "probe(5)").unwrap();
+        engine.set_entry("radius", "2").unwrap();
+        engine.set_constant("tau", 6.0);
+        engine.set_entry("area", "tau * radius ^ 2 / 2").unwrap();
+        engine.set_entry("scaled", "area + 1").unwrap();
+        assert_eq!(probe_calls.load(Ordering::SeqCst), 1);
+
+        engine.set_constant("tau", std::f64::consts::TAU);
+
+        assert_eq!(
+            engine.state("area"),
+            Some(&EntryState::Value(std::f64::consts::TAU * 2.0))
+        );
+        assert_eq!(
+            engine.state("scaled"),
+            Some(&EntryState::Value(std::f64::consts::TAU * 2.0 + 1.0))
+        );
+        assert_eq!(engine.state("unrelated"), Some(&EntryState::Value(5.0)));
+        assert_eq!(probe_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

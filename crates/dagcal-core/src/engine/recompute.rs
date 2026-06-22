@@ -27,10 +27,6 @@ impl Recomputer {
         self.graph.rebuild(store.dependency_entries());
     }
 
-    pub(super) fn recompute_all(&mut self, store: &mut EntryStore, context: &EvaluationContext) {
-        self.recompute_ids(store.ids(), store, context);
-    }
-
     pub(super) fn recompute_affected(
         &mut self,
         id: ExpressionId,
@@ -43,6 +39,15 @@ impl Recomputer {
 
     pub(super) fn collect_affected(&self, id: ExpressionId) -> BTreeSet<ExpressionId> {
         self.graph.affected_by(id)
+    }
+
+    pub(super) fn collect_affected_from(
+        &self,
+        ids: BTreeSet<ExpressionId>,
+    ) -> BTreeSet<ExpressionId> {
+        ids.into_iter()
+            .flat_map(|id| self.collect_affected(id))
+            .collect()
     }
 
     pub(super) fn cycle_report(&self) -> crate::dependency_graph::CycleReport {
