@@ -1,10 +1,20 @@
 use std::fmt;
 
+/// Stable 1-based identifier for a stored expression.
+///
+/// `ExpressionId` values are displayed as `$n` and are not renumbered when
+/// entries are removed. This stability lets persisted snapshots, dependency
+/// diagnostics, and frontends keep referring to the same stored result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExpressionId(usize);
 
 impl ExpressionId {
     /// Creates an expression ID from a 1-based sequential value.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `value` is `0`, because `$0` is not a valid result
+    /// reference.
     pub fn new(value: usize) -> Self {
         assert!(value > 0, "expression IDs must be 1-based");
         Self(value)

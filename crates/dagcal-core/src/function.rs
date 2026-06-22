@@ -5,21 +5,31 @@ use std::sync::Arc;
 
 type FunctionBody = dyn Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static;
 
+/// Arity contract for a callable function.
+///
+/// Function signatures are used by the evaluator before invoking a function
+/// body. They are also exposed in [`EvalError::ArityMismatch`] so callers can
+/// render precise diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionSignature {
+    /// Function must receive exactly this many arguments.
     Exact(usize),
+    /// Function accepts at least `min` arguments.
     Variadic { min: usize },
 }
 
 impl FunctionSignature {
+    /// Creates a signature that accepts exactly `arity` arguments.
     pub fn exact(arity: usize) -> Self {
         Self::Exact(arity)
     }
 
+    /// Creates a signature that accepts `min` or more arguments.
     pub fn variadic(min: usize) -> Self {
         Self::Variadic { min }
     }
 
+    /// Returns whether this signature accepts `actual` arguments.
     pub fn accepts(&self, actual: usize) -> bool {
         match self {
             Self::Exact(expected) => *expected == actual,

@@ -21,13 +21,67 @@ use std::collections::{BTreeSet, HashSet};
 
 pub use self::entry::{EntryState, EntryView, Execution};
 
+/// Human-readable dependency-cycle information for the current engine state.
+///
+/// The engine stores dependencies internally by [`ExpressionId`]. This type
+/// converts those IDs into display names so callers can render diagnostics
+/// without consulting entry metadata themselves. A named entry is displayed by
+/// its name; an unnamed expression is displayed as `$n`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CycleDiagnostics {
+    /// Strongly connected groups that currently form cycles.
+    ///
+    /// Each set contains the display names for entries in one cycle.
     pub cycles: Vec<BTreeSet<String>>,
+    /// Every entry that is directly part of at least one cycle.
     pub cycle_nodes: BTreeSet<String>,
+    /// Entries that are not themselves cyclic but cannot be evaluated because
+    /// they depend on a cyclic entry.
     pub dependent_nodes: BTreeSet<String>,
 }
 
+/// Stateful calculation engine with dependency tracking and recomputation.
+///
+/// `Engine` is the main public API for a calculator session. It owns:
+///
+/// - an entry store containing source text, stable IDs, optional names, and
+///   current [`EntryState`] values;
+/// - an evaluation context containing constants and functions;
+/// - a dependency graph used to recompute only entries affected by changes.
+///
+/// Entries are identified by stable 1-based [`ExpressionId`] values displayed
+/// as `$1`, `$2`, and so on. Named definitions such as `tax = subtotal * 0.1`
+/// are also addressable by name. References are resolved to entry IDs when an
+/// expression is saved, so removing a name does not silently rebind existing
+/// expressions to a constant or later entry with the same name.
+///
+/// Failed entries are part of normal engine state. Syntax errors, unknown
+/// references, unknown functions, cycles, division by zero, and other
+/// evaluation failures are stored as [`EntryState::Error`]. Dependents of a
+/// failed entry receive dependency errors until the failing entry is repaired.
+///
+/// # Recalculation model
+///
+/// Editing an entry rebuilds the dependency graph and recomputes the edited
+/// entry plus transitive dependents. Removing an entry recomputes entries that
+/// previously depended on it. Updating a constant or registering/replacing a
+/// function recomputes entries that referenced that symbol. Entries outside the
+/// affected set keep their previous state.
+///
+/// # Examples
+///
+/// ```
+/// use dagcal_core::{Engine, EntryState};
+///
+/// let mut engine = Engine::new();
+/// engine.execute("subtotal = 100");
+/// engine.execute("tax = subtotal * 0.1");
+///
+/// assert_eq!(engine.state("tax"), Some(&EntryState::Value(10.0)));
+///
+/// engine.set_entry("subtotal", "200").unwrap();
+/// assert_eq!(engine.state("tax"), Some(&EntryState::Value(20.0)));
+/// ```
 pub struct Engine {
     store: EntryStore,
     context: EvaluationContext,
@@ -41,6 +95,11 @@ impl Default for Engine {
 }
 
 impl Engine {
+    /// Creates an empty engine with the standard function registry and default
+    /// constants.
+    ///
+    /// The first plain expression or named definition saved into this engine
+    /// receives ID `$1`.
     pub fn new() -> Self {
         Self {
             store: EntryStore::new(),
@@ -49,6 +108,16 @@ impl Engine {
         }
     }
 
+    /// Captures the persistent session data needed to rebuild this engine.
+    ///
+    /// Snapshots contain entry IDs, optional names, original source text, and
+    /// the current snapshot format version. They intentionally do not store
+    /// computed values or dependency graph internals; those are rebuilt by
+    /// [`Engine::restore_snapshot`] or [`Engine::from_snapshot`].
+    ///
+    /// Runtime constants and user-registered functions are not included in the
+    /// snapshot. Restore into an engine configured with the same runtime
+    /// extensions when persisted expressions depend on them.
     pub fn snapshot(&self) -> EngineSnapshot {
         EngineSnapshot::new(
             self.entries()
@@ -62,12 +131,29 @@ impl Engine {
         )
     }
 
+    /// Builds a new engine from a previously captured snapshot.
+    ///
+    /// This is equivalent to creating [`Engine::new`] and then calling
+    /// [`Engine::restore_snapshot`]. Snapshot validation happens before the
+    /// returned engine is exposed.
     pub fn from_snapshot(snapshot: EngineSnapshot) -> Result<Self, DagcalError> {
         let mut engine = Self::new();
         engine.restore_snapshot(snapshot)?;
         Ok(engine)
     }
 
+    /// Replaces this engine's entries with data from a snapshot.
+    ///
+    /// The snapshot is first validated for version compatibility, nonzero
+    /// unique IDs, valid unique names, and then restored into a temporary
+    /// engine. This receiver is replaced only after restoration succeeds, so a
+    /// validation failure leaves the current engine unchanged.
+    ///
+    /// Restored expressions are parsed and resolved in ID order after all IDs
+    /// and names are reserved. This lets references between persisted entries
+    /// resolve even when the referenced entry appears later in the snapshot.
+    /// Values and errors are recomputed from source text after the dependency
+    /// graph is rebuilt.
     pub fn restore_snapshot(&mut self, snapshot: EngineSnapshot) -> Result<(), DagcalError> {
         let entries = validate_snapshot(snapshot)?;
         let mut restored = Self::new();
@@ -110,10 +196,17 @@ impl Engine {
         Ok(())
     }
 
-    /// Executes user input as either a named definition (`name = expr`) or an expression.
+    /// Executes user input as either a named definition (`name = expr`) or a
+    /// plain expression.
     ///
-    /// Named definitions update or create the named entry. Plain expressions are appended as the
-    /// next available `$n` result entry.
+    /// Named definitions update or create the named entry. The stored source for
+    /// a definition is the expression on the right side of `=`, not the complete
+    /// input line. Plain expressions are appended as the next available `$n`
+    /// result entry.
+    ///
+    /// A statement-level parse error is not saved because the engine cannot
+    /// determine a reliable target. In that case the returned [`Execution`] has
+    /// `id: None` and an [`EntryState::Error`].
     pub fn execute(&mut self, input: &str) -> Execution {
         match parse_statement(input) {
             Ok(ParsedStatement::Definition { name, expr }) => {
@@ -145,6 +238,13 @@ impl Engine {
         self.recompute_function_references(&name);
     }
 
+    /// Registers or replaces a fixed-arity function and recomputes entries that
+    /// reference it.
+    ///
+    /// The function receives evaluated argument values as an `&[f64]` whose
+    /// length is exactly `arity`. Return [`EvalError`] to surface a structured
+    /// evaluation failure. Returning `NaN` or infinity is normalized by the
+    /// evaluator into [`EvalError::Math`].
     pub fn register_fixed_function<F>(&mut self, name: impl Into<String>, arity: usize, body: F)
     where
         F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
@@ -152,6 +252,11 @@ impl Engine {
         self.register_function(name, FunctionSignature::exact(arity), body);
     }
 
+    /// Registers or replaces a variadic function and recomputes entries that
+    /// reference it.
+    ///
+    /// The function accepts at least `min` evaluated arguments. Arity validation
+    /// happens before `body` is called.
     pub fn register_variadic_function<F>(&mut self, name: impl Into<String>, min: usize, body: F)
     where
         F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
@@ -159,13 +264,30 @@ impl Engine {
         self.register_function(name, FunctionSignature::variadic(min), body);
     }
 
+    /// Sets or replaces a runtime constant and recomputes entries that
+    /// reference it.
+    ///
+    /// Entries take precedence over constants when a name exists in both
+    /// places. If `value` is non-finite, affected entries report
+    /// [`EvalError::Math`] instead of producing `NaN` or infinity.
     pub fn set_constant(&mut self, name: impl Into<String>, value: f64) {
         let name = name.into();
         self.context.set_constant(name.clone(), value);
         self.recompute_constant_references(&name);
     }
 
-    /// Sets or edits an entry by `$n` result reference or name and returns the saved result.
+    /// Sets or edits an entry by `$n` result reference or name.
+    ///
+    /// If the target exists, its source is replaced. If it does not exist, a
+    /// named target creates a named entry and a `$n` target creates or restores
+    /// that numbered result. The saved entry is recomputed along with its
+    /// transitive dependents.
+    ///
+    /// Unlike [`Engine::execute`], this method has an explicit target, so parse
+    /// errors are stored on that target. The method returns `Ok` only when the
+    /// saved target's final state is [`EntryState::Value`]. It returns `Err`
+    /// when the target was saved as [`EntryState::Error`], but the errored entry
+    /// remains in the engine for later inspection or repair.
     pub fn set_entry(
         &mut self,
         target: impl AsRef<str>,
@@ -184,6 +306,13 @@ impl Engine {
         }
     }
 
+    /// Removes an entry by name or `$n` reference.
+    ///
+    /// Returns a snapshot view of the removed entry when the target existed.
+    /// Entries that depended on the removed ID are recomputed and typically
+    /// become unknown-reference or dependency errors. Removing an entry does not
+    /// renumber later `$n` results; future plain expressions continue from the
+    /// highest allocated ID.
     pub fn remove_entry(&mut self, target: &str) -> Option<EntryView> {
         let target = EntryTarget::parse(target).ok()?;
         let id = self.store.id_for_target(&target)?;
@@ -197,31 +326,48 @@ impl Engine {
         removed.as_ref().map(EntryView::from)
     }
 
+    /// Returns the current state for an entry addressed by name or `$n`.
+    ///
+    /// Returns `None` when the target syntax is invalid or when no matching
+    /// entry exists.
     pub fn state(&self, target: &str) -> Option<&EntryState> {
         let target = EntryTarget::parse(target).ok()?;
         let id = self.store.id_for_target(&target)?;
         self.store.state(id)
     }
 
-    /// Returns the current state for an expression by its internal ID.
+    /// Returns the current state for an entry by its stable ID.
     pub fn state_by_id(&self, id: ExpressionId) -> Option<&EntryState> {
         self.store.state(id)
     }
 
+    /// Returns a renderable view of an entry addressed by name or `$n`.
+    ///
+    /// The returned [`EntryView`] is an owned snapshot of metadata and state, so
+    /// callers can keep it after later engine mutations.
     pub fn entry(&self, target: &str) -> Option<EntryView> {
         let target = EntryTarget::parse(target).ok()?;
         self.store.entry_view_for_target(&target)
     }
 
-    /// Returns a stored expression by its internal ID.
+    /// Returns a renderable view of an entry by its stable ID.
     pub fn entry_by_id(&self, id: ExpressionId) -> Option<EntryView> {
         self.store.entry_view(id)
     }
 
+    /// Returns all stored entries sorted by their stable ID.
+    ///
+    /// Removed entries are not included. The returned views are owned snapshots
+    /// of the engine state at the time of the call.
     pub fn entries(&self) -> Vec<EntryView> {
         self.store.entries()
     }
 
+    /// Returns the current dependency-cycle report using display names.
+    ///
+    /// Cycle diagnostics are derived from the latest dependency graph. Callers
+    /// can use this alongside [`Engine::entries`] to highlight cyclic entries
+    /// and entries blocked by cycles.
     pub fn cycle_diagnostics(&self) -> CycleDiagnostics {
         let report = self.recomputer.cycle_report();
 
@@ -236,6 +382,11 @@ impl Engine {
         }
     }
 
+    /// Parses and evaluates a source expression without storing it.
+    ///
+    /// This uses the current entries, constants, and function registry for
+    /// reference resolution, but it does not allocate an ID, change dependency
+    /// tracking, or recompute stored entries.
     pub fn eval_once(&self, source: &str) -> Result<f64, DagcalError> {
         let ast = self
             .resolve_expr(parse_expression(source)?)
