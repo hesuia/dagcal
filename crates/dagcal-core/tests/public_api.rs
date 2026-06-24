@@ -66,13 +66,26 @@ fn public_api_executes_standalone_number_literals() {
 
     let integer = engine.execute("10");
     let decimal = engine.execute("4.2");
+    let binary = engine.execute("0b1001.1101");
+    let octal = engine.execute("0o10.4");
+    let hexadecimal = engine.execute("0xA.F");
 
     assert_eq!(integer.id.unwrap().to_string(), "$1");
     assert_eq!(integer.state, EntryState::Value(10.0));
     assert_eq!(decimal.id.unwrap().to_string(), "$2");
     assert_eq!(decimal.state, EntryState::Value(4.2));
+    assert_eq!(binary.id.unwrap().to_string(), "$3");
+    assert_eq!(binary.state, EntryState::Value(9.8125));
+    assert_eq!(octal.id.unwrap().to_string(), "$4");
+    assert_eq!(octal.state, EntryState::Value(8.5));
+    assert_eq!(hexadecimal.id.unwrap().to_string(), "$5");
+    assert_eq!(hexadecimal.state, EntryState::Value(10.9375));
     assert_value(&engine, "$1", 10.0);
     assert_value(&engine, "$2", 4.2);
+    assert_value(&engine, "$3", 9.8125);
+    assert_value(&engine, "$4", 8.5);
+    assert_value(&engine, "$5", 10.9375);
+    assert_eq!(engine.eval_once("0xA.F + 0b.1").unwrap(), 11.4375);
 }
 
 #[test]

@@ -90,13 +90,7 @@ fn build_expr(pair: Pair<'_, Rule>) -> Result<ParsedExpr, DagcalError> {
         Rule::number => {
             let input = pair.as_str();
             let span = source_span_from_pest_span(pair.as_span());
-            input.parse::<f64>().map(ParsedExpr::Number).map_err(|err| {
-                parse_error_with_span(
-                    ParseErrorKind::InvalidNumber,
-                    format!("invalid number `{input}`: {err}"),
-                    span,
-                )
-            })
+            parse_number_literal(input, span).map(ParsedExpr::Number)
         }
         Rule::ident => Ok(ParsedExpr::Reference(ParsedReference::Name(
             pair.as_str().to_string(),
@@ -110,6 +104,85 @@ fn build_expr(pair: Pair<'_, Rule>) -> Result<ParsedExpr, DagcalError> {
             format!("unexpected parser rule {:?}", pair.as_rule()),
         )),
     }
+}
+
+fn parse_number_literal(input: &str, span: SourceSpan) -> Result<f64, DagcalError> {
+    if let Some(digits) = input
+        .strip_prefix("0b")
+        .or_else(|| input.strip_prefix("0B"))
+    {
+        parse_based_number(input, digits, 2, span)
+    } else if let Some(digits) = input
+        .strip_prefix("0o")
+        .or_else(|| input.strip_prefix("0O"))
+    {
+        parse_based_number(input, digits, 8, span)
+    } else if let Some(digits) = input
+        .strip_prefix("0x")
+        .or_else(|| input.strip_prefix("0X"))
+    {
+        parse_based_number(input, digits, 16, span)
+    } else {
+        input.parse::<f64>().map_err(|err| {
+            parse_error_with_span(
+                ParseErrorKind::InvalidNumber,
+                format!("invalid number `{input}`: {err}"),
+                span,
+            )
+        })
+    }
+}
+
+fn parse_based_number(
+    input: &str,
+    digits: &str,
+    base: u32,
+    span: SourceSpan,
+) -> Result<f64, DagcalError> {
+    let (integer, fraction) = digits.split_once('.').unwrap_or((digits, ""));
+    if integer.is_empty() && fraction.is_empty() {
+        return Err(invalid_number_error(
+            input,
+            "expected at least one digit",
+            span,
+        ));
+    }
+
+    let base_value = f64::from(base);
+    let mut value = 0.0;
+    for digit in integer.chars() {
+        value = value * base_value + f64::from(parse_digit(input, digit, base, &span)?);
+    }
+
+    let mut denominator = base_value;
+    for digit in fraction.chars() {
+        value += f64::from(parse_digit(input, digit, base, &span)?) / denominator;
+        denominator *= base_value;
+    }
+
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(invalid_number_error(input, "number is too large", span))
+    }
+}
+
+fn parse_digit(input: &str, digit: char, base: u32, span: &SourceSpan) -> Result<u32, DagcalError> {
+    digit.to_digit(base).ok_or_else(|| {
+        invalid_number_error(
+            input,
+            format!("digit `{digit}` is not valid for base {base}"),
+            span.clone(),
+        )
+    })
+}
+
+fn invalid_number_error(input: &str, reason: impl AsRef<str>, span: SourceSpan) -> DagcalError {
+    parse_error_with_span(
+        ParseErrorKind::InvalidNumber,
+        format!("invalid number `{input}`: {}", reason.as_ref()),
+        span,
+    )
 }
 
 fn parse_result_ref(pair: Pair<'_, Rule>) -> Result<ExpressionId, DagcalError> {
@@ -354,6 +427,24 @@ mod tests {
     }
 
     #[test]
+    fn parses_based_integer_and_fractional_literals() {
+        assert_eq!(
+            parse_expression("0b1001.1101").unwrap(),
+            ParsedExpr::Number(9.8125)
+        );
+        assert_eq!(parse_expression("0B.1").unwrap(), ParsedExpr::Number(0.5));
+        assert_eq!(parse_expression("0o10.4").unwrap(), ParsedExpr::Number(8.5));
+        assert_eq!(
+            parse_expression("0xA.F").unwrap(),
+            ParsedExpr::Number(10.9375)
+        );
+        assert_eq!(
+            parse_expression("0Xff.").unwrap(),
+            ParsedExpr::Number(255.0)
+        );
+    }
+
+    #[test]
     fn parses_standalone_number_literals() {
         assert_eq!(parse_expression("10").unwrap(), ParsedExpr::Number(10.0));
         assert_eq!(parse_expression("4.2").unwrap(), ParsedExpr::Number(4.2));
@@ -546,6 +637,30 @@ mod tests {
         assert!(parse_expression("1..2").is_err());
         assert!(parse_expression("$").is_err());
         assert!(parse_expression("$abc").is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_based_number_literals() {
+        assert_parse_error_kind(
+            parse_expression("0b102").unwrap_err(),
+            ParseErrorKind::InvalidNumber,
+        );
+        assert_parse_error_kind(
+            parse_expression("0o8").unwrap_err(),
+            ParseErrorKind::InvalidNumber,
+        );
+        assert_parse_error_kind(
+            parse_expression("0xG").unwrap_err(),
+            ParseErrorKind::InvalidNumber,
+        );
+        assert_parse_error_kind(
+            parse_expression("0x1.fp3").unwrap_err(),
+            ParseErrorKind::InvalidNumber,
+        );
+        assert_parse_error_kind(
+            parse_expression("0b.").unwrap_err(),
+            ParseErrorKind::InvalidNumber,
+        );
     }
 
     #[test]

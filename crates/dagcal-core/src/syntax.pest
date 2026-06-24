@@ -15,4 +15,6 @@ primary = { function_call | number | result_ref | ident | "(" ~ expr ~ ")" }
 function_call = { ident ~ "(" ~ (expr ~ ("," ~ expr)*)? ~ ")" }
 result_ref = @{ "$" ~ ASCII_DIGIT+ }
 ident = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
-number = @{ (ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT*)? | "." ~ ASCII_DIGIT+) ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+number = @{ based_number | decimal_number }
+decimal_number = { (ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT*)? | "." ~ ASCII_DIGIT+) ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+based_number = { ("0b" | "0B" | "0o" | "0O" | "0x" | "0X") ~ (ASCII_ALPHANUMERIC+ ~ ("." ~ ASCII_ALPHANUMERIC*)? | "." ~ ASCII_ALPHANUMERIC*) }
