@@ -261,3 +261,191 @@ fn pow_rational(value: &BigRational, exponent: i32) -> BigRational {
     let result = BigRational::new(value.numer().pow(power), value.denom().pow(power));
     if exponent < 0 { result.recip() } else { result }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_float_close(actual: Number, expected: f64) {
+        match actual {
+            Number::Float(actual) => {
+                assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+            }
+            other => panic!("expected float, got {other:?}"),
+        }
+    }
+
+    fn assert_rational(actual: Number, numerator: i64, denominator: i64) {
+        assert_eq!(actual, Number::rational(numerator, denominator));
+    }
+
+    #[test]
+    fn constructors_create_reduced_rationals_and_floats() {
+        assert_eq!(Number::integer(42), Number::rational(42, 1));
+        assert_eq!(Number::rational(6, 8), Number::rational(3, 4));
+        assert_eq!(Number::from(7_i32), Number::rational(7, 1));
+        assert_eq!(Number::from(7_i64), Number::rational(7, 1));
+        assert_eq!(Number::from(7_usize), Number::rational(7, 1));
+        assert_eq!(Number::from(0.25), Number::Float(0.25));
+        assert_eq!(Number::from_f64(0.25), Ok(Number::Float(0.25)));
+    }
+
+    #[test]
+    fn from_f64_rejects_non_finite_values() {
+        assert!(matches!(
+            Number::from_f64(f64::NAN),
+            Err(EvalError::Math(message)) if message == "number is non-finite"
+        ));
+        assert!(matches!(
+            Number::from_f64(f64::INFINITY),
+            Err(EvalError::Math(message)) if message == "number is non-finite"
+        ));
+    }
+
+    #[test]
+    fn parses_decimal_literals_exactly() {
+        assert_rational(Number::from_decimal_literal("10").unwrap(), 10, 1);
+        assert_rational(Number::from_decimal_literal("4.2").unwrap(), 21, 5);
+        assert_rational(Number::from_decimal_literal(".5").unwrap(), 1, 2);
+        assert_rational(Number::from_decimal_literal("1.").unwrap(), 1, 1);
+        assert_rational(Number::from_decimal_literal("1e3").unwrap(), 1000, 1);
+        assert_rational(Number::from_decimal_literal("1e-3").unwrap(), 1, 1000);
+        assert_rational(Number::from_decimal_literal("2.5E-1").unwrap(), 1, 4);
+        assert_rational(Number::from_decimal_literal("12.3400").unwrap(), 617, 50);
+    }
+
+    #[test]
+    fn rejects_invalid_decimal_literals() {
+        assert_eq!(Number::from_decimal_literal("abc"), None);
+        assert_eq!(Number::from_decimal_literal("1e"), None);
+        assert_eq!(Number::from_decimal_literal("1e+"), None);
+        assert_eq!(Number::from_decimal_literal("1.2.3"), None);
+    }
+
+    #[test]
+    fn parses_based_literals_exactly() {
+        assert_rational(Number::from_based_literal("1001.1101", 2).unwrap(), 157, 16);
+        assert_rational(Number::from_based_literal(".1", 2).unwrap(), 1, 2);
+        assert_rational(Number::from_based_literal("10.4", 8).unwrap(), 17, 2);
+        assert_rational(Number::from_based_literal("A.F", 16).unwrap(), 175, 16);
+        assert_rational(Number::from_based_literal("ff.", 16).unwrap(), 255, 1);
+    }
+
+    #[test]
+    fn rejects_invalid_based_literals() {
+        assert_eq!(Number::from_based_literal(".", 2), None);
+        assert_eq!(Number::from_based_literal("102", 2), None);
+        assert_eq!(Number::from_based_literal("8", 8), None);
+        assert_eq!(Number::from_based_literal("G", 16), None);
+    }
+
+    #[test]
+    fn rational_arithmetic_stays_exact() {
+        assert_rational(Number::rational(1, 10) + Number::rational(2, 10), 3, 10);
+        assert_rational(Number::rational(5, 6) - Number::rational(1, 3), 1, 2);
+        assert_rational(Number::rational(2, 3) * Number::rational(9, 4), 3, 2);
+        assert_rational(Number::rational(2, 3) / Number::rational(4, 5), 5, 6);
+        assert_rational(-Number::rational(1, 3), -1, 3);
+    }
+
+    #[test]
+    fn rational_remainder_matches_truncated_quotient_semantics() {
+        assert_rational(Number::rational(7, 3) % Number::from(1), 1, 3);
+        assert_rational(Number::rational(7, 3) % Number::rational(2, 3), 1, 3);
+        assert_rational(Number::rational(-7, 3) % Number::from(1), -1, 3);
+    }
+
+    #[test]
+    fn mixed_arithmetic_returns_float() {
+        assert_float_close(Number::rational(1, 2) + Number::Float(0.25), 0.75);
+        assert_float_close(Number::Float(1.0) - Number::rational(1, 4), 0.75);
+        assert_float_close(Number::Float(2.0) * Number::rational(3, 4), 1.5);
+        assert_float_close(Number::rational(3, 2) / Number::Float(2.0), 0.75);
+        assert_float_close(Number::Float(5.5) % Number::from(2), 1.5);
+    }
+
+    #[test]
+    fn integer_rational_powers_stay_exact() {
+        assert_eq!(
+            Number::rational(2, 3).pow(Number::from(3)).unwrap(),
+            Number::rational(8, 27)
+        );
+        assert_eq!(
+            Number::rational(2, 3).pow(Number::from(-2)).unwrap(),
+            Number::rational(9, 4)
+        );
+        assert_eq!(
+            Number::rational(2, 3).pow(Number::from(0)).unwrap(),
+            Number::from(1)
+        );
+    }
+
+    #[test]
+    fn non_integer_or_float_powers_return_float() {
+        assert_float_close(Number::from(9).pow(Number::rational(1, 2)).unwrap(), 3.0);
+        assert_float_close(Number::Float(2.0).pow(Number::from(3)).unwrap(), 8.0);
+    }
+
+    #[test]
+    fn non_finite_power_results_are_errors() {
+        assert!(matches!(
+            Number::Float(1e308).pow(Number::from(2)),
+            Err(EvalError::Math(message))
+                if message == "power operation produced non-finite result"
+        ));
+    }
+
+    #[test]
+    fn zero_and_finite_checks_cover_both_variants() {
+        assert!(Number::from(0).is_zero());
+        assert!(Number::Float(0.0).is_zero());
+        assert!(!Number::rational(1, 2).is_zero());
+        assert!(Number::rational(1, 2).is_finite());
+        assert!(Number::Float(1.0).is_finite());
+        assert!(!Number::Float(f64::NAN).is_finite());
+        assert!(!Number::Float(f64::INFINITY).is_finite());
+    }
+
+    #[test]
+    fn finite_wraps_non_finite_values_with_supplied_message() {
+        assert_eq!(
+            Number::rational(1, 2).finite(|| "unused".to_string()),
+            Ok(Number::rational(1, 2))
+        );
+        assert!(matches!(
+            Number::Float(f64::NAN).finite(|| "bad value".to_string()),
+            Err(EvalError::Math(message)) if message == "bad value"
+        ));
+    }
+
+    #[test]
+    fn abs_and_recip_preserve_variant_semantics() {
+        assert_eq!(Number::rational(-3, 4).abs(), Number::rational(3, 4));
+        assert_eq!(Number::rational(2, 3).recip(), Number::rational(3, 2));
+        assert_eq!(Number::Float(-2.5).abs(), Number::Float(2.5));
+        assert_eq!(Number::Float(4.0).recip(), Number::Float(0.25));
+    }
+
+    #[test]
+    fn display_keeps_integer_rationals_compact_and_uses_decimal_output_otherwise() {
+        assert_eq!(Number::from(42).to_string(), "42");
+        assert_eq!(Number::rational(1, 2).to_string(), "0.5");
+        assert_eq!(Number::Float(1.25).to_string(), "1.25");
+    }
+
+    #[test]
+    fn equality_compares_cross_variant_numeric_values_by_float_conversion() {
+        assert_eq!(Number::rational(1, 2), Number::Float(0.5));
+        assert_eq!(Number::rational(1, 3), Number::Float(1.0 / 3.0));
+        assert_ne!(Number::rational(1, 3), Number::Float(0.3));
+    }
+
+    #[test]
+    fn to_f64_converts_large_rationals_to_signed_infinity_when_needed() {
+        let huge_positive = Number::rational(BigInt::from(10_u8).pow(400), 1);
+        let huge_negative = Number::rational(-BigInt::from(10_u8).pow(400), 1);
+
+        assert_eq!(huge_positive.to_f64(), f64::INFINITY);
+        assert_eq!(huge_negative.to_f64(), f64::NEG_INFINITY);
+    }
+}
