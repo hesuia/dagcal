@@ -1,9 +1,10 @@
 use crate::error::EvalError;
+use crate::number::Number;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-type FunctionBody = dyn Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static;
+type FunctionBody = dyn Fn(&[Number]) -> Result<Number, EvalError> + Send + Sync + 'static;
 
 /// Arity contract for a callable function.
 ///
@@ -56,7 +57,7 @@ pub struct Function {
 impl Function {
     pub fn new<F>(signature: FunctionSignature, body: F) -> Self
     where
-        F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
+        F: Fn(&[Number]) -> Result<Number, EvalError> + Send + Sync + 'static,
     {
         Self {
             signature,
@@ -68,7 +69,7 @@ impl Function {
         &self.signature
     }
 
-    pub fn call(&self, args: &[f64]) -> Result<f64, EvalError> {
+    pub fn call(&self, args: &[Number]) -> Result<Number, EvalError> {
         (self.body)(args)
     }
 }
@@ -85,91 +86,111 @@ impl FunctionRegistry {
 
     pub fn standard() -> Self {
         let mut registry = Self::new();
-        registry.register_unary("abs", f64::abs);
-        registry.register_unary("sqrt", f64::sqrt);
-        registry.register_unary("cbrt", f64::cbrt);
-        registry.register_unary("floor", f64::floor);
-        registry.register_unary("ceil", f64::ceil);
-        registry.register_unary("round", f64::round);
-        registry.register_unary("trunc", f64::trunc);
-        registry.register_unary("fract", f64::fract);
-        registry.register_unary("signum", f64::signum);
-        registry.register_unary("recip", f64::recip);
+        registry.register_exact_unary("abs", Number::abs);
+        registry.register_float_unary("sqrt", f64::sqrt);
+        registry.register_float_unary("cbrt", f64::cbrt);
+        registry.register_float_unary("floor", f64::floor);
+        registry.register_float_unary("ceil", f64::ceil);
+        registry.register_float_unary("round", f64::round);
+        registry.register_float_unary("trunc", f64::trunc);
+        registry.register_float_unary("fract", f64::fract);
+        registry.register_float_unary("signum", f64::signum);
+        registry.register_exact_unary("recip", Number::recip);
 
-        registry.register_unary("sin", f64::sin);
-        registry.register_unary("cos", f64::cos);
-        registry.register_unary("tan", f64::tan);
-        registry.register_unary("asin", f64::asin);
-        registry.register_unary("acos", f64::acos);
-        registry.register_unary("atan", f64::atan);
-        registry.register_unary("sinh", f64::sinh);
-        registry.register_unary("cosh", f64::cosh);
-        registry.register_unary("tanh", f64::tanh);
-        registry.register_unary("asinh", f64::asinh);
-        registry.register_unary("acosh", f64::acosh);
-        registry.register_unary("atanh", f64::atanh);
+        registry.register_float_unary("sin", f64::sin);
+        registry.register_float_unary("cos", f64::cos);
+        registry.register_float_unary("tan", f64::tan);
+        registry.register_float_unary("asin", f64::asin);
+        registry.register_float_unary("acos", f64::acos);
+        registry.register_float_unary("atan", f64::atan);
+        registry.register_float_unary("sinh", f64::sinh);
+        registry.register_float_unary("cosh", f64::cosh);
+        registry.register_float_unary("tanh", f64::tanh);
+        registry.register_float_unary("asinh", f64::asinh);
+        registry.register_float_unary("acosh", f64::acosh);
+        registry.register_float_unary("atanh", f64::atanh);
 
-        registry.register_unary("exp", f64::exp);
-        registry.register_unary("exp2", f64::exp2);
-        registry.register_unary("ln", f64::ln);
-        registry.register_unary("log", f64::log10);
-        registry.register_unary("log2", f64::log2);
+        registry.register_float_unary("exp", f64::exp);
+        registry.register_float_unary("exp2", f64::exp2);
+        registry.register_float_unary("ln", f64::ln);
+        registry.register_float_unary("log", f64::log10);
+        registry.register_float_unary("log2", f64::log2);
 
-        registry.register_unary("to_radians", f64::to_radians);
-        registry.register_unary("to_degrees", f64::to_degrees);
+        registry.register_float_unary("to_radians", f64::to_radians);
+        registry.register_float_unary("to_degrees", f64::to_degrees);
 
-        registry.register_binary("atan2", f64::atan2);
-        registry.register_binary("hypot", f64::hypot);
-        registry.register_binary("pow", f64::powf);
-        registry.register_binary("logn", f64::log);
-        registry.register_binary("copysign", f64::copysign);
+        registry.register_float_binary("atan2", f64::atan2);
+        registry.register_float_binary("hypot", f64::hypot);
+        registry.register("pow", FunctionSignature::exact(2), |args| {
+            args[0].clone().pow(args[1].clone())
+        });
+        registry.register_float_binary("logn", f64::log);
+        registry.register_float_binary("copysign", f64::copysign);
 
-        registry.register_variadic("sum", 0, |args| Ok(args.iter().sum()));
+        registry.register_variadic("sum", 0, |args| {
+            Ok(args
+                .iter()
+                .cloned()
+                .fold(Number::from(0), |sum, value| sum + value))
+        });
         registry.register_variadic("avg", 1, |args| {
-            Ok(args.iter().sum::<f64>() / args.len() as f64)
+            let sum = args
+                .iter()
+                .cloned()
+                .fold(Number::from(0), |sum, value| sum + value);
+            Ok(sum / Number::from(args.len()))
         });
         registry.register_variadic("max", 1, |args| {
-            Ok(args
-                .iter()
-                .copied()
-                .fold(f64::NEG_INFINITY, |max, value| max.max(value)))
+            extremum(args, |candidate, current| {
+                candidate.to_f64() > current.to_f64()
+            })
         });
         registry.register_variadic("min", 1, |args| {
-            Ok(args
-                .iter()
-                .copied()
-                .fold(f64::INFINITY, |min, value| min.min(value)))
+            extremum(args, |candidate, current| {
+                candidate.to_f64() < current.to_f64()
+            })
         });
         registry
     }
 
     pub fn register<F>(&mut self, name: impl Into<String>, signature: FunctionSignature, body: F)
     where
-        F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
+        F: Fn(&[Number]) -> Result<Number, EvalError> + Send + Sync + 'static,
     {
         self.functions
             .insert(name.into(), Function::new(signature, body));
     }
 
-    fn register_unary(&mut self, name: impl Into<String>, body: fn(f64) -> f64) {
+    fn register_exact_unary(&mut self, name: impl Into<String>, body: fn(&Number) -> Number) {
         let name = name.into();
         let function_name = name.clone();
         self.register(name, FunctionSignature::exact(1), move |args| {
-            finite_function_result(&function_name, body(args[0]))
+            finite_function_result(&function_name, body(&args[0]))
         });
     }
 
-    fn register_binary(&mut self, name: impl Into<String>, body: fn(f64, f64) -> f64) {
+    fn register_float_unary(&mut self, name: impl Into<String>, body: fn(f64) -> f64) {
+        let name = name.into();
+        let function_name = name.clone();
+        self.register(name, FunctionSignature::exact(1), move |args| {
+            finite_function_result(&function_name, Number::Float(body(args[0].to_f64())))
+        });
+    }
+
+    fn register_float_binary(&mut self, name: impl Into<String>, body: fn(f64, f64) -> f64) {
         let name = name.into();
         let function_name = name.clone();
         self.register(name, FunctionSignature::exact(2), move |args| {
-            finite_function_result(&function_name, body(args[0], args[1]))
+            finite_function_result(
+                &function_name,
+                Number::Float(body(args[0].to_f64(), args[1].to_f64())),
+            )
         });
     }
 
     fn register_variadic<F>(&mut self, name: impl Into<String>, min: usize, body: F)
     where
-        F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
+        F: Fn(&[Number]) -> Result<Number, EvalError> + Send + Sync + 'static,
     {
         let name = name.into();
         let function_name = name.clone();
@@ -183,7 +204,7 @@ impl FunctionRegistry {
     }
 }
 
-fn finite_function_result(name: &str, value: f64) -> Result<f64, EvalError> {
+fn finite_function_result(name: &str, value: Number) -> Result<Number, EvalError> {
     if value.is_finite() {
         Ok(value)
     } else {
@@ -193,16 +214,36 @@ fn finite_function_result(name: &str, value: f64) -> Result<f64, EvalError> {
     }
 }
 
+fn extremum(
+    args: &[Number],
+    is_better: impl Fn(&Number, &Number) -> bool,
+) -> Result<Number, EvalError> {
+    let mut result = args[0].clone();
+    for value in &args[1..] {
+        if is_better(value, &result) {
+            result = value.clone();
+        }
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn assert_close(actual: f64, expected: f64) {
-        assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    fn assert_close(actual: Number, expected: f64) {
+        assert!(
+            (actual.to_f64() - expected).abs() < 1e-12,
+            "{actual} != {expected}"
+        );
     }
 
-    fn call_standard(name: &str, args: &[f64]) -> Result<f64, EvalError> {
-        FunctionRegistry::standard().get(name).unwrap().call(args)
+    fn call_standard(name: &str, args: &[f64]) -> Result<Number, EvalError> {
+        let args = args
+            .iter()
+            .map(|value| Number::from(*value))
+            .collect::<Vec<_>>();
+        FunctionRegistry::standard().get(name).unwrap().call(&args)
     }
 
     #[test]
@@ -230,12 +271,12 @@ mod tests {
         let mut registry = FunctionRegistry::new();
 
         registry.register("double", FunctionSignature::exact(1), |args| {
-            Ok(args[0] * 2.0)
+            Ok(args[0].clone() * Number::from(2))
         });
 
         let function = registry.get("double").unwrap();
         assert_eq!(function.signature(), &FunctionSignature::Exact(1));
-        assert_eq!(function.call(&[21.0]), Ok(42.0));
+        assert_eq!(function.call(&[Number::from(21)]), Ok(Number::from(42)));
         assert!(registry.get("missing").is_none());
     }
 

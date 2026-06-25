@@ -102,7 +102,7 @@ pub enum ParseErrorKind {
     Syntax,
     /// The input was empty or whitespace only.
     EmptyInput,
-    /// A numeric literal could not be converted to `f64`.
+    /// A numeric literal could not be converted to a number.
     InvalidNumber,
     /// A `$n` reference was malformed or otherwise invalid.
     InvalidReference,

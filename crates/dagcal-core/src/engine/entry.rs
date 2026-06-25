@@ -1,6 +1,7 @@
 use crate::ast::{ExpressionAnalysis, ResolvedExpr};
 use crate::error::{DagcalError, EvalError};
 use crate::id::ExpressionId;
+use crate::number::Number;
 
 #[derive(Debug, Clone)]
 pub(super) struct Entry {
@@ -85,8 +86,8 @@ impl From<&Entry> for EntryView {
 /// Current computation result for an engine entry or execution attempt.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EntryState {
-    /// Expression evaluated successfully to a finite `f64`.
-    Value(f64),
+    /// Expression evaluated successfully to a finite number.
+    Value(Number),
     /// Parsing, resolving, dependency analysis, or evaluation failed.
     Error(DagcalError),
 }

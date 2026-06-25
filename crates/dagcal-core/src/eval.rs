@@ -2,15 +2,16 @@ use crate::ast::{BinaryOp, ResolvedExpr, UnaryOp};
 use crate::error::EvalError;
 use crate::function::FunctionRegistry;
 use crate::id::ExpressionId;
+use crate::number::Number;
 
 pub(crate) fn eval_expr(
     expr: &ResolvedExpr,
     functions: &FunctionRegistry,
-    resolve_entry: &mut dyn FnMut(ExpressionId) -> Result<f64, EvalError>,
-    resolve_constant: &mut dyn FnMut(&str) -> Result<f64, EvalError>,
-) -> Result<f64, EvalError> {
+    resolve_entry: &mut dyn FnMut(ExpressionId) -> Result<Number, EvalError>,
+    resolve_constant: &mut dyn FnMut(&str) -> Result<Number, EvalError>,
+) -> Result<Number, EvalError> {
     match expr {
-        ResolvedExpr::Number(value) => Ok(*value),
+        ResolvedExpr::Number(value) => Ok(value.clone()),
         ResolvedExpr::EntryReference(id) => finite_value(resolve_entry(*id)?, || {
             format!("reference `${}` produced non-finite result", id.value())
         }),
@@ -42,7 +43,7 @@ pub(crate) fn eval_expr(
                     "multiplication operation produced non-finite result".to_string()
                 }),
                 BinaryOp::Div => {
-                    if rhs == 0.0 {
+                    if rhs.is_zero() {
                         Err(EvalError::DivisionByZero)
                     } else {
                         finite_value(lhs / rhs, || {
@@ -51,7 +52,7 @@ pub(crate) fn eval_expr(
                     }
                 }
                 BinaryOp::Rem => {
-                    if rhs == 0.0 {
+                    if rhs.is_zero() {
                         Err(EvalError::RemainderByZero)
                     } else {
                         finite_value(lhs % rhs, || {
@@ -59,9 +60,7 @@ pub(crate) fn eval_expr(
                         })
                     }
                 }
-                BinaryOp::Pow => finite_value(lhs.powf(rhs), || {
-                    "power operation produced non-finite result".to_string()
-                }),
+                BinaryOp::Pow => lhs.pow(rhs),
             }
         }
         ResolvedExpr::Call { name, args } => {
@@ -87,15 +86,11 @@ pub(crate) fn eval_expr(
     }
 }
 
-fn finite_value<F>(value: f64, message: F) -> Result<f64, EvalError>
+fn finite_value<F>(value: Number, message: F) -> Result<Number, EvalError>
 where
     F: FnOnce() -> String,
 {
-    if value.is_finite() {
-        Ok(value)
-    } else {
-        Err(EvalError::Math(message()))
-    }
+    value.finite(message)
 }
 
 #[cfg(test)]
@@ -105,8 +100,11 @@ mod tests {
     use crate::function::FunctionSignature;
     use std::collections::HashMap;
 
-    fn assert_close(actual: f64, expected: f64) {
-        assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    fn assert_close(actual: Number, expected: f64) {
+        assert!(
+            (actual.to_f64() - expected).abs() < 1e-12,
+            "{actual} != {expected}"
+        );
     }
 
     fn eval_with_refs(
@@ -114,28 +112,31 @@ mod tests {
         refs: &[(ExpressionId, f64)],
         constants: &[(&str, f64)],
         functions: &FunctionRegistry,
-    ) -> Result<f64, EvalError> {
-        let refs = refs.iter().copied().collect::<HashMap<_, _>>();
+    ) -> Result<Number, EvalError> {
+        let refs = refs
+            .iter()
+            .map(|(id, value)| (*id, Number::from(*value)))
+            .collect::<HashMap<_, _>>();
         let constants = constants
             .iter()
-            .map(|(name, value)| ((*name).to_string(), *value))
+            .map(|(name, value)| ((*name).to_string(), Number::from(*value)))
             .collect::<HashMap<_, _>>();
         let mut resolve_entry = |id: ExpressionId| {
             refs.get(&id)
-                .copied()
+                .cloned()
                 .ok_or_else(|| EvalError::UnknownReference(format!("${}", id.value())))
         };
         let mut resolve_constant = |name: &str| {
             constants
                 .get(name)
-                .copied()
+                .cloned()
                 .ok_or_else(|| EvalError::UnknownReference(name.to_string()))
         };
 
         eval_expr(expr, functions, &mut resolve_entry, &mut resolve_constant)
     }
 
-    fn eval_standard(source: &str) -> Result<f64, EvalError> {
+    fn eval_standard(source: &str) -> Result<Number, EvalError> {
         let functions = FunctionRegistry::standard();
         let expr = test_expr(source);
         eval_with_refs(
@@ -149,89 +150,89 @@ mod tests {
     fn test_expr(source: &str) -> ResolvedExpr {
         match source {
             "1 + 2 * 3" => ResolvedExpr::Binary {
-                lhs: Box::new(ResolvedExpr::Number(1.0)),
+                lhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(1.0))),
                 op: BinaryOp::Add,
                 rhs: Box::new(ResolvedExpr::Binary {
-                    lhs: Box::new(ResolvedExpr::Number(2.0)),
+                    lhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(2.0))),
                     op: BinaryOp::Mul,
-                    rhs: Box::new(ResolvedExpr::Number(3.0)),
+                    rhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(3.0))),
                 }),
             },
             "(1 + 2) * 3" => ResolvedExpr::Binary {
                 lhs: Box::new(ResolvedExpr::Binary {
-                    lhs: Box::new(ResolvedExpr::Number(1.0)),
+                    lhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(1.0))),
                     op: BinaryOp::Add,
-                    rhs: Box::new(ResolvedExpr::Number(2.0)),
+                    rhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(2.0))),
                 }),
                 op: BinaryOp::Mul,
-                rhs: Box::new(ResolvedExpr::Number(3.0)),
+                rhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(3.0))),
             },
             "10 % 4" => ResolvedExpr::Binary {
-                lhs: Box::new(ResolvedExpr::Number(10.0)),
+                lhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(10.0))),
                 op: BinaryOp::Rem,
-                rhs: Box::new(ResolvedExpr::Number(4.0)),
+                rhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(4.0))),
             },
             "2 ^ 3 ^ 2" => ResolvedExpr::Binary {
-                lhs: Box::new(ResolvedExpr::Number(2.0)),
+                lhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(2.0))),
                 op: BinaryOp::Pow,
                 rhs: Box::new(ResolvedExpr::Binary {
-                    lhs: Box::new(ResolvedExpr::Number(3.0)),
+                    lhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(3.0))),
                     op: BinaryOp::Pow,
-                    rhs: Box::new(ResolvedExpr::Number(2.0)),
+                    rhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(2.0))),
                 }),
             },
             "-2 ^ 2" => ResolvedExpr::Unary {
                 op: UnaryOp::Minus,
                 rhs: Box::new(ResolvedExpr::Binary {
-                    lhs: Box::new(ResolvedExpr::Number(2.0)),
+                    lhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(2.0))),
                     op: BinaryOp::Pow,
-                    rhs: Box::new(ResolvedExpr::Number(2.0)),
+                    rhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(2.0))),
                 }),
             },
             "+5 - -2" => ResolvedExpr::Binary {
                 lhs: Box::new(ResolvedExpr::Unary {
                     op: UnaryOp::Plus,
-                    rhs: Box::new(ResolvedExpr::Number(5.0)),
+                    rhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(5.0))),
                 }),
                 op: BinaryOp::Sub,
                 rhs: Box::new(ResolvedExpr::Unary {
                     op: UnaryOp::Minus,
-                    rhs: Box::new(ResolvedExpr::Number(2.0)),
+                    rhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(2.0))),
                 }),
             },
             "1 / 0" => ResolvedExpr::Binary {
-                lhs: Box::new(ResolvedExpr::Number(1.0)),
+                lhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(1.0))),
                 op: BinaryOp::Div,
-                rhs: Box::new(ResolvedExpr::Number(0.0)),
+                rhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(0.0))),
             },
             "1 % 0" => ResolvedExpr::Binary {
-                lhs: Box::new(ResolvedExpr::Number(1.0)),
+                lhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(1.0))),
                 op: BinaryOp::Rem,
-                rhs: Box::new(ResolvedExpr::Number(0.0)),
+                rhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(0.0))),
             },
             "missing + 1" => ResolvedExpr::Binary {
                 lhs: Box::new(ResolvedExpr::Constant("missing".to_string())),
                 op: BinaryOp::Add,
-                rhs: Box::new(ResolvedExpr::Number(1.0)),
+                rhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(1.0))),
             },
             "nope(1)" => ResolvedExpr::Call {
                 name: "nope".to_string(),
-                args: vec![ResolvedExpr::Number(1.0)],
+                args: vec![ResolvedExpr::Number(crate::number::Number::from(1.0))],
             },
             "1e308 ^ 2" => ResolvedExpr::Binary {
-                lhs: Box::new(ResolvedExpr::Number(1e308)),
+                lhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(1e308))),
                 op: BinaryOp::Pow,
-                rhs: Box::new(ResolvedExpr::Number(2.0)),
+                rhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(2.0))),
             },
             "1e308 + 1e308" => ResolvedExpr::Binary {
-                lhs: Box::new(ResolvedExpr::Number(1e308)),
+                lhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(1e308))),
                 op: BinaryOp::Add,
-                rhs: Box::new(ResolvedExpr::Number(1e308)),
+                rhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(1e308))),
             },
             "1e308 * 1e308" => ResolvedExpr::Binary {
-                lhs: Box::new(ResolvedExpr::Number(1e308)),
+                lhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(1e308))),
                 op: BinaryOp::Mul,
-                rhs: Box::new(ResolvedExpr::Number(1e308)),
+                rhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(1e308))),
             },
             _ => panic!("missing test expression fixture for {source}"),
         }
@@ -251,7 +252,7 @@ mod tests {
     fn evaluates_function_calls_after_arguments() {
         let mut functions = FunctionRegistry::new();
         functions.register("weighted", FunctionSignature::exact(2), |args| {
-            Ok(args[0] + args[1] * 10.0)
+            Ok(args[0].clone() + args[1].clone() * Number::from(10))
         });
 
         assert_close(
@@ -262,7 +263,7 @@ mod tests {
                         ResolvedExpr::Binary {
                             lhs: Box::new(ResolvedExpr::EntryReference(ExpressionId::new(1))),
                             op: BinaryOp::Add,
-                            rhs: Box::new(ResolvedExpr::Number(1.0)),
+                            rhs: Box::new(ResolvedExpr::Number(crate::number::Number::from(1.0))),
                         },
                         ResolvedExpr::EntryReference(ExpressionId::new(2)),
                     ],
@@ -363,7 +364,7 @@ mod tests {
     fn standardizes_non_finite_constants_references_and_custom_functions() {
         let mut functions = FunctionRegistry::new();
         functions.register("explode", FunctionSignature::exact(0), |_| {
-            Ok(f64::INFINITY)
+            Ok(Number::Float(f64::INFINITY))
         });
 
         assert!(matches!(

@@ -1,6 +1,7 @@
 use crate::ast::{BinaryOp, ParsedExpr, ParsedReference, ParsedStatement, UnaryOp};
 use crate::error::{DagcalError, ParseError, ParseErrorKind, SourcePosition, SourceSpan};
 use crate::id::ExpressionId;
+use crate::number::Number;
 use pest::Parser;
 use pest::Span;
 use pest::error::{
@@ -106,7 +107,7 @@ fn build_expr(pair: Pair<'_, Rule>) -> Result<ParsedExpr, DagcalError> {
     }
 }
 
-fn parse_number_literal(input: &str, span: SourceSpan) -> Result<f64, DagcalError> {
+fn parse_number_literal(input: &str, span: SourceSpan) -> Result<Number, DagcalError> {
     if let Some(digits) = input
         .strip_prefix("0b")
         .or_else(|| input.strip_prefix("0B"))
@@ -123,13 +124,8 @@ fn parse_number_literal(input: &str, span: SourceSpan) -> Result<f64, DagcalErro
     {
         parse_based_number(input, digits, 16, span)
     } else {
-        input.parse::<f64>().map_err(|err| {
-            parse_error_with_span(
-                ParseErrorKind::InvalidNumber,
-                format!("invalid number `{input}`: {err}"),
-                span,
-            )
-        })
+        Number::from_decimal_literal(input)
+            .ok_or_else(|| invalid_number_error(input, "could not parse decimal literal", span))
     }
 }
 
@@ -138,7 +134,7 @@ fn parse_based_number(
     digits: &str,
     base: u32,
     span: SourceSpan,
-) -> Result<f64, DagcalError> {
+) -> Result<Number, DagcalError> {
     let (integer, fraction) = digits.split_once('.').unwrap_or((digits, ""));
     if integer.is_empty() && fraction.is_empty() {
         return Err(invalid_number_error(
@@ -148,23 +144,11 @@ fn parse_based_number(
         ));
     }
 
-    let base_value = f64::from(base);
-    let mut value = 0.0;
-    for digit in integer.chars() {
-        value = value * base_value + f64::from(parse_digit(input, digit, base, &span)?);
+    for digit in integer.chars().chain(fraction.chars()) {
+        parse_digit(input, digit, base, &span)?;
     }
-
-    let mut denominator = base_value;
-    for digit in fraction.chars() {
-        value += f64::from(parse_digit(input, digit, base, &span)?) / denominator;
-        denominator *= base_value;
-    }
-
-    if value.is_finite() {
-        Ok(value)
-    } else {
-        Err(invalid_number_error(input, "number is too large", span))
-    }
+    Number::from_based_literal(digits, base)
+        .ok_or_else(|| invalid_number_error(input, "could not parse based literal", span))
 }
 
 fn parse_digit(input: &str, digit: char, base: u32, span: &SourceSpan) -> Result<u32, DagcalError> {
@@ -393,12 +377,12 @@ mod tests {
         assert_eq!(
             expr,
             ParsedExpr::Binary {
-                lhs: Box::new(ParsedExpr::Number(1.0)),
+                lhs: Box::new(ParsedExpr::Number(crate::number::Number::from(1.0))),
                 op: BinaryOp::Add,
                 rhs: Box::new(ParsedExpr::Binary {
-                    lhs: Box::new(ParsedExpr::Number(2.0)),
+                    lhs: Box::new(ParsedExpr::Number(crate::number::Number::from(2.0))),
                     op: BinaryOp::Mul,
-                    rhs: Box::new(ParsedExpr::Number(3.0)),
+                    rhs: Box::new(ParsedExpr::Number(crate::number::Number::from(3.0))),
                 }),
             }
         );
@@ -413,15 +397,15 @@ mod tests {
             ParsedExpr::Binary {
                 lhs: Box::new(ParsedExpr::Binary {
                     lhs: Box::new(ParsedExpr::Binary {
-                        lhs: Box::new(ParsedExpr::Number(0.5)),
+                        lhs: Box::new(ParsedExpr::Number(crate::number::Number::from(0.5))),
                         op: BinaryOp::Add,
-                        rhs: Box::new(ParsedExpr::Number(1000.0)),
+                        rhs: Box::new(ParsedExpr::Number(crate::number::Number::from(1000.0))),
                     }),
                     op: BinaryOp::Add,
-                    rhs: Box::new(ParsedExpr::Number(0.25)),
+                    rhs: Box::new(ParsedExpr::Number(crate::number::Number::from(0.25))),
                 }),
                 op: BinaryOp::Add,
-                rhs: Box::new(ParsedExpr::Number(1.0)),
+                rhs: Box::new(ParsedExpr::Number(crate::number::Number::from(1.0))),
             }
         );
     }
@@ -430,24 +414,36 @@ mod tests {
     fn parses_based_integer_and_fractional_literals() {
         assert_eq!(
             parse_expression("0b1001.1101").unwrap(),
-            ParsedExpr::Number(9.8125)
+            ParsedExpr::Number(crate::number::Number::from(9.8125))
         );
-        assert_eq!(parse_expression("0B.1").unwrap(), ParsedExpr::Number(0.5));
-        assert_eq!(parse_expression("0o10.4").unwrap(), ParsedExpr::Number(8.5));
+        assert_eq!(
+            parse_expression("0B.1").unwrap(),
+            ParsedExpr::Number(crate::number::Number::from(0.5))
+        );
+        assert_eq!(
+            parse_expression("0o10.4").unwrap(),
+            ParsedExpr::Number(crate::number::Number::from(8.5))
+        );
         assert_eq!(
             parse_expression("0xA.F").unwrap(),
-            ParsedExpr::Number(10.9375)
+            ParsedExpr::Number(crate::number::Number::from(10.9375))
         );
         assert_eq!(
             parse_expression("0Xff.").unwrap(),
-            ParsedExpr::Number(255.0)
+            ParsedExpr::Number(crate::number::Number::from(255.0))
         );
     }
 
     #[test]
     fn parses_standalone_number_literals() {
-        assert_eq!(parse_expression("10").unwrap(), ParsedExpr::Number(10.0));
-        assert_eq!(parse_expression("4.2").unwrap(), ParsedExpr::Number(4.2));
+        assert_eq!(
+            parse_expression("10").unwrap(),
+            ParsedExpr::Number(crate::number::Number::from(10.0))
+        );
+        assert_eq!(
+            parse_expression("4.2").unwrap(),
+            ParsedExpr::Number(crate::number::Number::from(4.2))
+        );
     }
 
     #[test]
@@ -457,12 +453,12 @@ mod tests {
         assert_eq!(
             expr,
             ParsedExpr::Binary {
-                lhs: Box::new(ParsedExpr::Number(2.0)),
+                lhs: Box::new(ParsedExpr::Number(crate::number::Number::from(2.0))),
                 op: BinaryOp::Pow,
                 rhs: Box::new(ParsedExpr::Binary {
-                    lhs: Box::new(ParsedExpr::Number(3.0)),
+                    lhs: Box::new(ParsedExpr::Number(crate::number::Number::from(3.0))),
                     op: BinaryOp::Pow,
-                    rhs: Box::new(ParsedExpr::Number(2.0)),
+                    rhs: Box::new(ParsedExpr::Number(crate::number::Number::from(2.0))),
                 }),
             }
         );

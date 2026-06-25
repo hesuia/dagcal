@@ -1,10 +1,11 @@
 use std::collections::BTreeSet;
 
 use crate::id::ExpressionId;
+use crate::number::Number;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedExpr {
-    Number(f64),
+    Number(Number),
     Reference(ParsedReference),
     Unary {
         op: UnaryOp,
@@ -79,7 +80,7 @@ impl ParsedExpr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedExpr {
-    Number(f64),
+    Number(Number),
     EntryReference(ExpressionId),
     Constant(String),
     Unary {

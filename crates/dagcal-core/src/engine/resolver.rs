@@ -1,11 +1,12 @@
 use super::store::EntryStore;
 use crate::ast::{ParsedExpr, ParsedReference, ResolvedExpr};
 use crate::error::EvalError;
+use crate::number::Number;
 use std::collections::HashMap;
 
 pub(super) fn resolve_expr(
     store: &EntryStore,
-    constants: &HashMap<String, f64>,
+    constants: &HashMap<String, Number>,
     expr: ParsedExpr,
 ) -> Result<ResolvedExpr, EvalError> {
     match expr {
@@ -32,7 +33,7 @@ pub(super) fn resolve_expr(
 
 fn resolve_reference(
     store: &EntryStore,
-    constants: &HashMap<String, f64>,
+    constants: &HashMap<String, Number>,
     reference: ParsedReference,
 ) -> Result<ResolvedExpr, EvalError> {
     match reference {

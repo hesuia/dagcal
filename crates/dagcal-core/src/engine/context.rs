@@ -5,10 +5,11 @@ use crate::error::EvalError;
 use crate::eval::eval_expr;
 use crate::function::{FunctionRegistry, FunctionSignature};
 use crate::id::ExpressionId;
+use crate::number::Number;
 use std::collections::HashMap;
 
 pub(super) struct EvaluationContext {
-    constants: HashMap<String, f64>,
+    constants: HashMap<String, Number>,
     functions: FunctionRegistry,
 }
 
@@ -22,14 +23,14 @@ impl EvaluationContext {
     pub(super) fn new() -> Self {
         Self {
             constants: HashMap::from([
-                ("e".to_string(), std::f64::consts::E),
-                ("pi".to_string(), std::f64::consts::PI),
+                ("e".to_string(), Number::Float(std::f64::consts::E)),
+                ("pi".to_string(), Number::Float(std::f64::consts::PI)),
             ]),
             functions: FunctionRegistry::standard(),
         }
     }
 
-    pub(super) fn constants(&self) -> &HashMap<String, f64> {
+    pub(super) fn constants(&self) -> &HashMap<String, Number> {
         &self.constants
     }
 
@@ -39,25 +40,25 @@ impl EvaluationContext {
         signature: FunctionSignature,
         body: F,
     ) where
-        F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
+        F: Fn(&[Number]) -> Result<Number, EvalError> + Send + Sync + 'static,
     {
         self.functions.register(name, signature, body);
     }
 
-    pub(super) fn set_constant(&mut self, name: impl Into<String>, value: f64) {
-        self.constants.insert(name.into(), value);
+    pub(super) fn set_constant(&mut self, name: impl Into<String>, value: impl Into<Number>) {
+        self.constants.insert(name.into(), value.into());
     }
 
     pub(super) fn eval_expr(
         &self,
         ast: &ResolvedExpr,
         store: &EntryStore,
-    ) -> Result<f64, EvalError> {
+    ) -> Result<Number, EvalError> {
         let mut resolve_entry = |id| resolve_entry_reference(id, store);
         let mut resolve_constant = |name: &str| {
             self.constants
                 .get(name)
-                .copied()
+                .cloned()
                 .ok_or_else(|| EvalError::UnknownReference(name.to_string()))
         };
         eval_expr(
@@ -69,10 +70,10 @@ impl EvaluationContext {
     }
 }
 
-fn resolve_entry_reference(id: ExpressionId, store: &EntryStore) -> Result<f64, EvalError> {
+fn resolve_entry_reference(id: ExpressionId, store: &EntryStore) -> Result<Number, EvalError> {
     if let Some(entry) = store.entry(id) {
         match &entry.state {
-            EntryState::Value(value) => Ok(*value),
+            EntryState::Value(value) => Ok(value.clone()),
             EntryState::Error(_) => Err(EvalError::DependencyError(store.display_name_for_id(id))),
         }
     } else {

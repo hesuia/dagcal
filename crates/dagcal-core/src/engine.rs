@@ -15,6 +15,7 @@ use crate::ast::{ParsedExpr, ParsedStatement};
 use crate::error::{DagcalError, EvalError, PersistenceError};
 use crate::function::FunctionSignature;
 use crate::id::ExpressionId;
+use crate::number::Number;
 use crate::parser::{parse_expression, parse_statement};
 use crate::persistence::{ENGINE_SNAPSHOT_VERSION, EngineSnapshot, PersistedEntry};
 use std::collections::{BTreeSet, HashSet};
@@ -71,16 +72,16 @@ pub struct CycleDiagnostics {
 /// # Examples
 ///
 /// ```
-/// use dagcal_core::{Engine, EntryState};
+/// use dagcal_core::{Engine, EntryState, Number};
 ///
 /// let mut engine = Engine::new();
 /// engine.execute("subtotal = 100");
 /// engine.execute("tax = subtotal * 0.1");
 ///
-/// assert_eq!(engine.state("tax"), Some(&EntryState::Value(10.0)));
+/// assert_eq!(engine.state("tax"), Some(&EntryState::Value(Number::from(10.0))));
 ///
 /// engine.set_entry("subtotal", "200").unwrap();
-/// assert_eq!(engine.state("tax"), Some(&EntryState::Value(20.0)));
+/// assert_eq!(engine.state("tax"), Some(&EntryState::Value(Number::from(20.0))));
 /// ```
 pub struct Engine {
     store: EntryStore,
@@ -230,7 +231,7 @@ impl Engine {
         signature: FunctionSignature,
         body: F,
     ) where
-        F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
+        F: Fn(&[Number]) -> Result<Number, EvalError> + Send + Sync + 'static,
     {
         let name = name.into();
         self.context
@@ -241,13 +242,13 @@ impl Engine {
     /// Registers or replaces a fixed-arity function and recomputes entries that
     /// reference it.
     ///
-    /// The function receives evaluated argument values as an `&[f64]` whose
+    /// The function receives evaluated argument values as an `&[Number]` whose
     /// length is exactly `arity`. Return [`EvalError`] to surface a structured
-    /// evaluation failure. Returning `NaN` or infinity is normalized by the
+    /// evaluation failure. Returning non-finite float values is normalized by the
     /// evaluator into [`EvalError::Math`].
     pub fn register_fixed_function<F>(&mut self, name: impl Into<String>, arity: usize, body: F)
     where
-        F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
+        F: Fn(&[Number]) -> Result<Number, EvalError> + Send + Sync + 'static,
     {
         self.register_function(name, FunctionSignature::exact(arity), body);
     }
@@ -259,7 +260,7 @@ impl Engine {
     /// happens before `body` is called.
     pub fn register_variadic_function<F>(&mut self, name: impl Into<String>, min: usize, body: F)
     where
-        F: Fn(&[f64]) -> Result<f64, EvalError> + Send + Sync + 'static,
+        F: Fn(&[Number]) -> Result<Number, EvalError> + Send + Sync + 'static,
     {
         self.register_function(name, FunctionSignature::variadic(min), body);
     }
@@ -270,7 +271,7 @@ impl Engine {
     /// Entries take precedence over constants when a name exists in both
     /// places. If `value` is non-finite, affected entries report
     /// [`EvalError::Math`] instead of producing `NaN` or infinity.
-    pub fn set_constant(&mut self, name: impl Into<String>, value: f64) {
+    pub fn set_constant(&mut self, name: impl Into<String>, value: impl Into<Number>) {
         let name = name.into();
         self.context.set_constant(name.clone(), value);
         self.recompute_constant_references(&name);
@@ -387,7 +388,7 @@ impl Engine {
     /// This uses the current entries, constants, and function registry for
     /// reference resolution, but it does not allocate an ID, change dependency
     /// tracking, or recompute stored entries.
-    pub fn eval_once(&self, source: &str) -> Result<f64, DagcalError> {
+    pub fn eval_once(&self, source: &str) -> Result<Number, DagcalError> {
         let ast = self
             .resolve_expr(parse_expression(source)?)
             .map_err(DagcalError::Eval)?;
@@ -526,7 +527,9 @@ mod tests {
 
     fn assert_value(engine: &Engine, id: &str, expected: f64) {
         match engine.state(id) {
-            Some(EntryState::Value(actual)) => assert!((actual - expected).abs() < 1e-12),
+            Some(EntryState::Value(actual)) => {
+                assert!((actual.to_f64() - expected).abs() < 1e-12)
+            }
             other => panic!("expected value for {id}, got {other:?}"),
         }
     }
@@ -890,9 +893,15 @@ mod tests {
         let taxed = engine.execute("subtotal * 1.1");
 
         assert_eq!(execution_id_display(&subtotal), "$1");
-        assert_eq!(subtotal.state, EntryState::Value(100.0));
+        assert_eq!(
+            subtotal.state,
+            EntryState::Value(crate::number::Number::from(100.0))
+        );
         assert_eq!(execution_id_display(&taxed), "$2");
-        assert_eq!(taxed.state, EntryState::Value(110.00000000000001));
+        assert_eq!(
+            taxed.state,
+            EntryState::Value(crate::number::Number::from(110.0))
+        );
         assert_eq!(engine.entry("subtotal").unwrap().source, "100");
         assert_eq!(engine.entry("$1").unwrap().source, "100");
         assert_eq!(engine.entry("$2").unwrap().source, "subtotal * 1.1");
@@ -921,8 +930,14 @@ mod tests {
 
         assert_eq!(execution_id_display(&first), "$1");
         assert_eq!(execution_id_display(&second), "$2");
-        assert_eq!(first.state, EntryState::Value(3.0));
-        assert_eq!(second.state, EntryState::Value(30.0));
+        assert_eq!(
+            first.state,
+            EntryState::Value(crate::number::Number::from(3.0))
+        );
+        assert_eq!(
+            second.state,
+            EntryState::Value(crate::number::Number::from(30.0))
+        );
         assert_value(&engine, "$2", 30.0);
     }
 
@@ -997,7 +1012,10 @@ mod tests {
         let sixth = engine.execute("$5 + $3");
 
         assert_eq!(execution_id_display(&sixth), "$6");
-        assert_eq!(sixth.state, EntryState::Value(50.2));
+        assert_eq!(
+            sixth.state,
+            EntryState::Value(crate::number::Number::from(50.2))
+        );
         assert_value(&engine, "$6", 50.2);
     }
 
@@ -1009,7 +1027,10 @@ mod tests {
         let execution = engine.execute("$1 + 1");
 
         assert_eq!(execution_id_display(&execution), "$2");
-        assert_eq!(execution.state, EntryState::Value(101.0));
+        assert_eq!(
+            execution.state,
+            EntryState::Value(crate::number::Number::from(101.0))
+        );
     }
 
     #[test]
@@ -1020,7 +1041,10 @@ mod tests {
         let execution = engine.execute("$5 + 1");
 
         assert_eq!(execution_id_display(&execution), "$6");
-        assert_eq!(execution.state, EntryState::Value(101.0));
+        assert_eq!(
+            execution.state,
+            EntryState::Value(crate::number::Number::from(101.0))
+        );
     }
 
     #[test]
@@ -1032,7 +1056,10 @@ mod tests {
         let entry = engine.entry(&id_display).unwrap();
         let id = entry.id;
 
-        assert_eq!(engine.state_by_id(id), Some(&EntryState::Value(42.0)));
+        assert_eq!(
+            engine.state_by_id(id),
+            Some(&EntryState::Value(crate::number::Number::from(42.0)))
+        );
         assert_eq!(engine.entry_by_id(id).unwrap().id.to_string(), "$1");
     }
 
@@ -1106,10 +1133,16 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].0, "$1");
         assert_eq!(entries[0].1, "100");
-        assert_eq!(entries[0].2, EntryState::Value(100.0));
+        assert_eq!(
+            entries[0].2,
+            EntryState::Value(crate::number::Number::from(100.0))
+        );
         assert_eq!(entries[1].0, "$2");
         assert_eq!(entries[1].1, "subtotal * 1.1");
-        assert_eq!(entries[1].2, EntryState::Value(110.00000000000001));
+        assert_eq!(
+            entries[1].2,
+            EntryState::Value(crate::number::Number::from(110.0))
+        );
     }
 
     #[test]
@@ -1118,7 +1151,10 @@ mod tests {
 
         engine.set_entry("subtotal", "40").unwrap();
 
-        assert_eq!(engine.eval_once("subtotal * 1.1").unwrap(), 44.0);
+        assert_eq!(
+            engine.eval_once("subtotal * 1.1").unwrap(),
+            crate::number::Number::from(44.0)
+        );
     }
 
     #[test]
@@ -1126,9 +1162,14 @@ mod tests {
         let mut engine = Engine::new();
 
         assert!(engine.set_entry("x", "triple(14)").is_err());
-        engine.register_fixed_function("triple", 1, |args| Ok(args[0] * 3.0));
+        engine.register_fixed_function("triple", 1, |args| {
+            Ok(args[0].clone() * crate::number::Number::from(3))
+        });
 
-        assert_eq!(engine.state("x"), Some(&EntryState::Value(42.0)));
+        assert_eq!(
+            engine.state("x"),
+            Some(&EntryState::Value(crate::number::Number::from(42.0)))
+        );
     }
 
     #[test]
@@ -1139,18 +1180,29 @@ mod tests {
 
         engine.register_fixed_function("probe", 1, move |args| {
             probe_calls_for_body.fetch_add(1, Ordering::SeqCst);
-            Ok(args[0])
+            Ok(args[0].clone())
         });
         engine.set_entry("unrelated", "probe(5)").unwrap();
         assert!(engine.set_entry("x", "triple(14)").is_err());
         assert!(engine.set_entry("y", "x + 1").is_err());
         assert_eq!(probe_calls.load(Ordering::SeqCst), 1);
 
-        engine.register_fixed_function("triple", 1, |args| Ok(args[0] * 3.0));
+        engine.register_fixed_function("triple", 1, |args| {
+            Ok(args[0].clone() * crate::number::Number::from(3))
+        });
 
-        assert_eq!(engine.state("x"), Some(&EntryState::Value(42.0)));
-        assert_eq!(engine.state("y"), Some(&EntryState::Value(43.0)));
-        assert_eq!(engine.state("unrelated"), Some(&EntryState::Value(5.0)));
+        assert_eq!(
+            engine.state("x"),
+            Some(&EntryState::Value(crate::number::Number::from(42.0)))
+        );
+        assert_eq!(
+            engine.state("y"),
+            Some(&EntryState::Value(crate::number::Number::from(43.0)))
+        );
+        assert_eq!(
+            engine.state("unrelated"),
+            Some(&EntryState::Value(crate::number::Number::from(5.0)))
+        );
         assert_eq!(probe_calls.load(Ordering::SeqCst), 1);
     }
 
@@ -1159,9 +1211,19 @@ mod tests {
         let mut engine = Engine::new();
 
         assert!(engine.set_entry("x", "product(2, 3, 4)").is_err());
-        engine.register_variadic_function("product", 0, |args| Ok(args.iter().product()));
+        engine.register_variadic_function("product", 0, |args| {
+            Ok(args
+                .iter()
+                .cloned()
+                .fold(crate::number::Number::from(1), |product, value| {
+                    product * value
+                }))
+        });
 
-        assert_eq!(engine.state("x"), Some(&EntryState::Value(24.0)));
+        assert_eq!(
+            engine.state("x"),
+            Some(&EntryState::Value(crate::number::Number::from(24.0)))
+        );
     }
 
     #[test]
@@ -1175,7 +1237,9 @@ mod tests {
 
         assert_eq!(
             engine.state("area"),
-            Some(&EntryState::Value(std::f64::consts::TAU * 2.0))
+            Some(&EntryState::Value(crate::number::Number::from(
+                std::f64::consts::TAU * 2.0
+            )))
         );
     }
 
@@ -1187,7 +1251,7 @@ mod tests {
 
         engine.register_fixed_function("probe", 1, move |args| {
             probe_calls_for_body.fetch_add(1, Ordering::SeqCst);
-            Ok(args[0])
+            Ok(args[0].clone())
         });
         engine.set_entry("unrelated", "probe(5)").unwrap();
         engine.set_entry("radius", "2").unwrap();
@@ -1200,13 +1264,20 @@ mod tests {
 
         assert_eq!(
             engine.state("area"),
-            Some(&EntryState::Value(std::f64::consts::TAU * 2.0))
+            Some(&EntryState::Value(crate::number::Number::from(
+                std::f64::consts::TAU * 2.0
+            )))
         );
         assert_eq!(
             engine.state("scaled"),
-            Some(&EntryState::Value(std::f64::consts::TAU * 2.0 + 1.0))
+            Some(&EntryState::Value(crate::number::Number::from(
+                std::f64::consts::TAU * 2.0 + 1.0
+            )))
         );
-        assert_eq!(engine.state("unrelated"), Some(&EntryState::Value(5.0)));
+        assert_eq!(
+            engine.state("unrelated"),
+            Some(&EntryState::Value(crate::number::Number::from(5.0)))
+        );
         assert_eq!(probe_calls.load(Ordering::SeqCst), 1);
     }
 

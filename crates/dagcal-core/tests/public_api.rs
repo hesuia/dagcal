@@ -1,12 +1,15 @@
 use dagcal_core::{
-    DagcalError, Engine, EngineSnapshot, EntryState, EvalError, ParseErrorKind, PersistedEntry,
-    PersistenceError,
+    DagcalError, Engine, EngineSnapshot, EntryState, EvalError, Number, ParseErrorKind,
+    PersistedEntry, PersistenceError,
 };
 
 fn assert_value(engine: &Engine, target: &str, expected: f64) {
     match engine.state(target) {
         Some(EntryState::Value(actual)) => {
-            assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+            assert!(
+                (actual.to_f64() - expected).abs() < 1e-12,
+                "{actual} != {expected}"
+            );
         }
         other => panic!("expected value for {target}, got {other:?}"),
     }
@@ -29,9 +32,9 @@ fn user_session_supports_definitions_results_edits_and_recovery() {
     let total = engine.execute("subtotal + $3");
 
     assert_eq!(subtotal.id.unwrap().to_string(), "$1");
-    assert_eq!(subtotal.state, EntryState::Value(100.0));
+    assert_eq!(subtotal.state, EntryState::Value(Number::from(100.0)));
     assert_eq!(tax_rate.id.unwrap().to_string(), "$2");
-    assert_eq!(tax_rate.state, EntryState::Value(0.1));
+    assert_eq!(tax_rate.state, EntryState::Value(Number::from(0.1)));
     assert_eq!(tax.id.unwrap().to_string(), "$3");
     assert_eq!(total.id.unwrap().to_string(), "$4");
     assert_value(&engine, "$1", 100.0);
@@ -71,21 +74,61 @@ fn public_api_executes_standalone_number_literals() {
     let hexadecimal = engine.execute("0xA.F");
 
     assert_eq!(integer.id.unwrap().to_string(), "$1");
-    assert_eq!(integer.state, EntryState::Value(10.0));
+    assert_eq!(integer.state, EntryState::Value(Number::from(10.0)));
     assert_eq!(decimal.id.unwrap().to_string(), "$2");
-    assert_eq!(decimal.state, EntryState::Value(4.2));
+    assert_eq!(decimal.state, EntryState::Value(Number::from(4.2)));
     assert_eq!(binary.id.unwrap().to_string(), "$3");
-    assert_eq!(binary.state, EntryState::Value(9.8125));
+    assert_eq!(binary.state, EntryState::Value(Number::from(9.8125)));
     assert_eq!(octal.id.unwrap().to_string(), "$4");
-    assert_eq!(octal.state, EntryState::Value(8.5));
+    assert_eq!(octal.state, EntryState::Value(Number::from(8.5)));
     assert_eq!(hexadecimal.id.unwrap().to_string(), "$5");
-    assert_eq!(hexadecimal.state, EntryState::Value(10.9375));
+    assert_eq!(hexadecimal.state, EntryState::Value(Number::from(10.9375)));
     assert_value(&engine, "$1", 10.0);
     assert_value(&engine, "$2", 4.2);
     assert_value(&engine, "$3", 9.8125);
     assert_value(&engine, "$4", 8.5);
     assert_value(&engine, "$5", 10.9375);
-    assert_eq!(engine.eval_once("0xA.F + 0b.1").unwrap(), 11.4375);
+    assert_eq!(
+        engine.eval_once("0xA.F + 0b.1").unwrap(),
+        Number::from(11.4375)
+    );
+}
+
+#[test]
+fn public_api_preserves_exact_fraction_arithmetic() {
+    let mut engine = Engine::new();
+
+    let decimal_sum = engine.execute("0.1 + 0.2");
+    let divided_then_scaled = engine.execute("1 / 3 * 3");
+    let based_sum = engine.execute("0xA.F + 0b.1");
+
+    assert_eq!(
+        decimal_sum.state,
+        EntryState::Value(Number::rational(3, 10))
+    );
+    assert_eq!(
+        divided_then_scaled.state,
+        EntryState::Value(Number::from(1))
+    );
+    assert_eq!(
+        based_sum.state,
+        EntryState::Value(Number::rational(183, 16))
+    );
+}
+
+#[test]
+fn public_api_keeps_approximate_results_at_float_boundaries() {
+    let mut engine = Engine::new();
+
+    let pi_plus_one = engine.execute("pi + 1");
+    let sine = engine.execute("sin(pi / 2)");
+
+    assert!(matches!(
+        pi_plus_one.state,
+        EntryState::Value(Number::Float(_))
+    ));
+    assert!(matches!(sine.state, EntryState::Value(Number::Float(_))));
+    assert_value(&engine, "$2", 1.0);
 }
 
 #[test]
@@ -100,7 +143,7 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
     assert!(engine.set_entry("b", "a + 1").is_err());
     let dependent = engine.execute("a + base");
 
-    assert_eq!(valid.state, EntryState::Value(10.0));
+    assert_eq!(valid.state, EntryState::Value(Number::from(10.0)));
     assert!(parse_error.id.is_none());
     match parse_error.state {
         EntryState::Error(DagcalError::Parse(err)) => {
@@ -109,8 +152,8 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
         }
         other => panic!("expected parse error, got {other:?}"),
     }
-    assert_eq!(cycle_a.state, EntryState::Value(1.0));
-    assert_eq!(cycle_b.state, EntryState::Value(2.0));
+    assert_eq!(cycle_a.state, EntryState::Value(Number::from(1.0)));
+    assert_eq!(cycle_b.state, EntryState::Value(Number::from(2.0)));
     assert!(matches!(
         engine.state("b"),
         Some(EntryState::Error(DagcalError::Eval(
@@ -162,7 +205,7 @@ fn public_api_supports_runtime_extensions_used_by_frontends() {
     );
     assert_value(&engine, "$2", 3.0);
 
-    engine.register_fixed_function("triple", 1, |args| Ok(args[0] * 3.0));
+    engine.register_fixed_function("triple", 1, |args| Ok(args[0].clone() * Number::from(3)));
     engine.set_constant("tau", std::f64::consts::TAU);
 
     assert_value(&engine, "$1", 42.0);
@@ -178,7 +221,7 @@ fn public_api_normalizes_non_finite_runtime_extensions_to_math_errors() {
     let function = engine.execute("explode()");
 
     engine.set_constant("tau", f64::NAN);
-    engine.register_fixed_function("explode", 0, |_| Ok(f64::INFINITY));
+    engine.register_fixed_function("explode", 0, |_| Ok(Number::Float(f64::INFINITY)));
 
     assert_eq!(constant.id.unwrap().to_string(), "$1");
     assert_eq!(function.id.unwrap().to_string(), "$2");
@@ -206,7 +249,7 @@ fn public_api_exposes_entries_for_frontend_state_rendering() {
 
     assert_eq!(
         engine.state_by_id(total_id),
-        Some(&EntryState::Value(132.0))
+        Some(&EntryState::Value(Number::from(132.0)))
     );
 
     let entries = engine
@@ -227,17 +270,17 @@ fn public_api_exposes_entries_for_frontend_state_rendering() {
             (
                 "$1".to_string(),
                 "120".to_string(),
-                EntryState::Value(120.0),
+                EntryState::Value(Number::from(120.0)),
             ),
             (
                 "$2".to_string(),
                 "subtotal * 0.1".to_string(),
-                EntryState::Value(12.0),
+                EntryState::Value(Number::from(12.0)),
             ),
             (
                 "$3".to_string(),
                 "subtotal + tax".to_string(),
-                EntryState::Value(132.0),
+                EntryState::Value(Number::from(132.0)),
             ),
         ]
     );

@@ -6,15 +6,15 @@
 //! expressions can refer to either names or `$n` result references:
 //!
 //! ```
-//! use dagcal_core::{Engine, EntryState};
+//! use dagcal_core::{Engine, EntryState, Number};
 //!
 //! let mut engine = Engine::new();
 //! engine.execute("subtotal = 100");
 //! engine.execute("tax = subtotal * 0.1");
 //! let total = engine.execute("subtotal + tax");
 //!
-//! assert_eq!(total.state, EntryState::Value(110.0));
-//! assert_eq!(engine.state("$3"), Some(&EntryState::Value(110.0)));
+//! assert_eq!(total.state, EntryState::Value(Number::from(110.0)));
+//! assert_eq!(engine.state("$3"), Some(&EntryState::Value(Number::from(110.0))));
 //! ```
 //!
 //! The [`Engine`] owns the complete session state. When an entry is edited,
@@ -50,18 +50,20 @@
 //! runtime. Existing entries that reference the changed symbol are recomputed:
 //!
 //! ```
-//! use dagcal_core::{Engine, EntryState};
+//! use dagcal_core::{Engine, EntryState, Number};
 //!
 //! let mut engine = Engine::new();
 //! let before = engine.execute("triple(14)");
 //! assert!(matches!(before.state, EntryState::Error(_)));
 //!
-//! engine.register_fixed_function("triple", 1, |args| Ok(args[0] * 3.0));
-//! assert_eq!(engine.state("$1"), Some(&EntryState::Value(42.0)));
+//! engine.register_fixed_function("triple", 1, |args| {
+//!     Ok(args[0].clone() * Number::from(3))
+//! });
+//! assert_eq!(engine.state("$1"), Some(&EntryState::Value(Number::from(42.0))));
 //! ```
 //!
-//! Built-in functions and user functions must return finite `f64` values. A
-//! non-finite value is reported as [`EvalError::Math`].
+//! Built-in functions and user functions must return finite [`Number`] values.
+//! A non-finite float value is reported as [`EvalError::Math`].
 
 mod ast;
 mod dependency_graph;
@@ -70,6 +72,7 @@ mod error;
 mod eval;
 mod function;
 mod id;
+mod number;
 mod parser;
 mod persistence;
 
@@ -80,4 +83,5 @@ pub use error::{
 };
 pub use function::FunctionSignature;
 pub use id::ExpressionId;
+pub use number::Number;
 pub use persistence::{ENGINE_SNAPSHOT_VERSION, EngineSnapshot, PersistedEntry};
