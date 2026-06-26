@@ -20,3 +20,9 @@ Recent history uses short imperative commit subjects such as `Add persistence sn
 
 ## Architecture Notes
 The core library models expressions as a dependency graph with stable `$n` result IDs and optional user-defined names. Preserve that stability when editing persistence, entry removal, or recomputation logic, because downstream behavior and tests depend on it.
+
+The current API boundary is:
+
+- internal engine state, store, resolver, dependency graph, recomputation, and other main logics should use `ExpressionId` as the canonical identifier;
+- `dagcal-core` may still expose convenience APIs that accept names or `$n` strings, but those APIs should resolve to `ExpressionId` immediately and then delegate to ID-specific methods;
+- prefer adding or changing `*_by_id` methods when a caller already has a stable ID, and keep name/$n parsing isolated to the public convenience layer.
