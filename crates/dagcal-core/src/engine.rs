@@ -1,15 +1,22 @@
-mod context;
+mod compiled;
+mod dependencies;
 mod entry;
 mod recompute;
+mod repository;
 mod resolver;
-mod store;
+mod results;
+mod runtime;
+mod symbol;
 mod target;
 
-use self::context::EvaluationContext;
-use self::entry::Entry;
-use self::recompute::Recomputer;
+use self::compiled::{CompiledEntry, CompiledEntryStore};
+use self::dependencies::DependencyIndex;
+use self::recompute::{EvaluationRunner, RecomputePlanner};
+use self::repository::{EntryRecord, EntryRepository};
 use self::resolver::resolve_expr;
-use self::store::EntryStore;
+use self::results::ResultCache;
+use self::runtime::RuntimeEnvironment;
+use self::symbol::SymbolTable;
 pub use self::target::{EntryTarget, IntoEntryTarget};
 use crate::ast::{ParsedExpr, ParsedStatement};
 use crate::error::{DagcalError, EvalError, PersistenceError};
@@ -38,6 +45,84 @@ pub struct CycleDiagnostics {
     /// Entries that are not themselves cyclic but cannot be evaluated because
     /// they depend on a cyclic entry.
     pub dependent_nodes: BTreeSet<ExpressionId>,
+}
+
+struct Session {
+    entries: EntryRepository,
+    compiled: CompiledEntryStore,
+    dependencies: DependencyIndex,
+    results: ResultCache,
+    runtime: RuntimeEnvironment,
+}
+
+impl Session {
+    fn new() -> Self {
+        Self {
+            entries: EntryRepository::new(),
+            compiled: CompiledEntryStore::new(),
+            dependencies: DependencyIndex::new(),
+            results: ResultCache::new(),
+            runtime: RuntimeEnvironment::new(),
+        }
+    }
+
+    fn resolve_expr(&self, expr: ParsedExpr) -> Result<crate::ast::ResolvedExpr, EvalError> {
+        resolve_expr(&SymbolTable::new(&self.entries, &self.runtime), expr)
+    }
+
+    fn rebuild_dependencies(&mut self) {
+        self.dependencies
+            .rebuild(self.compiled.dependency_entries());
+    }
+
+    fn affected_by(&self, id: ExpressionId) -> BTreeSet<ExpressionId> {
+        RecomputePlanner::new(&self.dependencies).affected_by(id)
+    }
+
+    fn affected_by_any(
+        &self,
+        ids: impl IntoIterator<Item = ExpressionId>,
+    ) -> BTreeSet<ExpressionId> {
+        RecomputePlanner::new(&self.dependencies).affected_by_any(ids)
+    }
+
+    fn recompute_ids(&mut self, ids: BTreeSet<ExpressionId>) {
+        let Self {
+            compiled,
+            dependencies,
+            results,
+            runtime,
+            ..
+        } = self;
+        EvaluationRunner::new(dependencies, compiled, runtime).recompute_ids(ids, results);
+    }
+
+    fn recompute_affected(&mut self, id: ExpressionId) {
+        let affected = self.affected_by(id);
+        self.recompute_ids(affected);
+    }
+
+    fn state(&self, id: ExpressionId) -> Option<&EntryState> {
+        self.results.get(id)
+    }
+
+    fn entry_view(&self, id: ExpressionId) -> Option<EntryView> {
+        let record = self.entries.record(id)?;
+        Some(EntryView {
+            id: record.id,
+            name: record.name.clone(),
+            source: record.source.clone(),
+            state: self.results.get(id)?.clone(),
+        })
+    }
+
+    fn entries(&self) -> Vec<EntryView> {
+        self.entries
+            .records()
+            .into_iter()
+            .filter_map(|record| self.entry_view(record.id))
+            .collect()
+    }
 }
 
 /// Stateful calculation engine with dependency tracking and recomputation.
@@ -85,9 +170,7 @@ pub struct CycleDiagnostics {
 /// assert_eq!(engine.state(tax), Some(&EntryState::Value(Number::from(20.0))));
 /// ```
 pub struct Engine {
-    store: EntryStore,
-    context: EvaluationContext,
-    recomputer: Recomputer,
+    session: Session,
 }
 
 impl Default for Engine {
@@ -104,9 +187,7 @@ impl Engine {
     /// receives ID `$1`.
     pub fn new() -> Self {
         Self {
-            store: EntryStore::new(),
-            context: EvaluationContext::new(),
-            recomputer: Recomputer::new(),
+            session: Session::new(),
         }
     }
 
@@ -162,37 +243,28 @@ impl Engine {
 
         for entry in &entries {
             restored
-                .store
+                .session
+                .entries
                 .reserve_restored_entry(ExpressionId::new(entry.id), entry.name.as_deref());
         }
 
         for entry in entries {
             let id = ExpressionId::new(entry.id);
-            let restored_entry = match parse_expression(&entry.source) {
-                Ok(ast) => match restored.resolve_expr(ast) {
-                    Ok(ast) => Entry::from_resolved(id, entry.name, entry.source, ast),
-                    Err(err) => Entry::from_parse_error(
-                        id,
-                        entry.name,
-                        entry.source,
-                        DagcalError::Eval(err),
-                    ),
+            let record = EntryRecord::new(id, entry.name, entry.source.clone());
+            let compiled = match parse_expression(&entry.source) {
+                Ok(ast) => match restored.session.resolve_expr(ast) {
+                    Ok(ast) => CompiledEntry::from_resolved(ast),
+                    Err(err) => CompiledEntry::from_error(DagcalError::Eval(err)),
                 },
-                Err(err) => Entry::from_parse_error(id, entry.name, entry.source, err),
+                Err(err) => CompiledEntry::from_error(err),
             };
-            restored.store.insert(id, restored_entry);
+            restored.session.entries.upsert(record);
+            restored.session.compiled.insert(id, compiled);
         }
 
-        restored.recomputer.rebuild_graph(&restored.store);
-        let ids = restored
-            .store
-            .entries()
-            .into_iter()
-            .map(|entry| entry.id)
-            .collect();
-        restored
-            .recomputer
-            .recompute_ids(ids, &mut restored.store, &restored.context);
+        restored.session.rebuild_dependencies();
+        let ids = restored.session.entries.ids().collect();
+        restored.session.recompute_ids(ids);
 
         *self = restored;
         Ok(())
@@ -213,11 +285,11 @@ impl Engine {
         match parse_statement(input) {
             Ok(ParsedStatement::Definition { name, expr }) => {
                 let source = definition_source(input, &name);
-                let (id, name) = self.store.resolve_or_create_name(name);
+                let (id, name) = self.session.entries.resolve_or_create_name(name);
                 self.save_parsed_entry(id, name, source, expr)
             }
             Ok(ParsedStatement::Expression(expr)) => {
-                let id = self.store.allocate_id();
+                let id = self.session.entries.allocate_id();
                 self.save_parsed_entry(id, None, input.trim().to_string(), expr)
             }
             Err(err) => Execution {
@@ -236,7 +308,8 @@ impl Engine {
         F: Fn(&[Number]) -> Result<Number, EvalError> + Send + Sync + 'static,
     {
         let name = name.into();
-        self.context
+        self.session
+            .runtime
             .register_function(name.clone(), signature, body);
         self.recompute_function_references(&name);
     }
@@ -275,7 +348,7 @@ impl Engine {
     /// [`EvalError::Math`] instead of producing `NaN` or infinity.
     pub fn set_constant(&mut self, name: impl Into<String>, value: impl Into<Number>) {
         let name = name.into();
-        self.context.set_constant(name.clone(), value);
+        self.session.runtime.set_constant(name.clone(), value);
         self.recompute_constant_references(&name);
     }
 
@@ -308,8 +381,8 @@ impl Engine {
         id: ExpressionId,
         source: impl Into<String>,
     ) -> Result<Execution, DagcalError> {
-        let name = self.store.name_for_id(id).cloned();
-        self.store.reserve_id(id);
+        let name = self.session.entries.name_for_id(id).cloned();
+        self.session.entries.reserve_id(id);
         self.set_entry_for_id(id, name, source)
     }
 
@@ -348,14 +421,14 @@ impl Engine {
 
     /// Removes an entry by stable expression ID.
     pub fn remove_entry_by_id(&mut self, id: ExpressionId) -> Option<EntryView> {
-        let affected = self.recomputer.collect_affected(id);
-        let removed = self.store.remove(id);
-        if removed.is_some() {
-            self.recomputer.rebuild_graph(&self.store);
-            self.recomputer
-                .recompute_ids(affected, &mut self.store, &self.context);
-        }
-        removed.as_ref().map(EntryView::from)
+        let removed = self.session.entry_view(id)?;
+        let affected = self.session.affected_by(id);
+        self.session.entries.remove(id)?;
+        self.session.compiled.remove(id);
+        self.session.results.remove(id);
+        self.session.rebuild_dependencies();
+        self.session.recompute_ids(affected);
+        Some(removed)
     }
 
     /// Returns the current state for an entry by `$n`, name, or stable ID.
@@ -371,7 +444,7 @@ impl Engine {
 
     /// Returns the current state for an entry by its stable ID.
     pub fn state_by_id(&self, id: ExpressionId) -> Option<&EntryState> {
-        self.store.state(id)
+        self.session.state(id)
     }
 
     /// Returns a renderable view of an entry by `$n`, name, or stable ID.
@@ -388,7 +461,7 @@ impl Engine {
 
     /// Returns a renderable view of an entry by its stable ID.
     pub fn entry_by_id(&self, id: ExpressionId) -> Option<EntryView> {
-        self.store.entry_view(id)
+        self.session.entry_view(id)
     }
 
     /// Returns all stored entries sorted by their stable ID.
@@ -396,7 +469,7 @@ impl Engine {
     /// Removed entries are not included. The returned views are owned snapshots
     /// of the engine state at the time of the call.
     pub fn entries(&self) -> Vec<EntryView> {
-        self.store.entries()
+        self.session.entries()
     }
 
     /// Returns the current dependency-cycle report using expression IDs.
@@ -405,7 +478,7 @@ impl Engine {
     /// can use this alongside [`Engine::entries`] to highlight cyclic entries
     /// and entries blocked by cycles.
     pub fn cycle_diagnostics(&self) -> CycleDiagnostics {
-        let report = self.recomputer.cycle_report();
+        let report = self.session.dependencies.cycle_report();
 
         CycleDiagnostics {
             cycles: report.cycles,
@@ -421,25 +494,23 @@ impl Engine {
     /// tracking, or recompute stored entries.
     pub fn eval_once(&self, source: &str) -> Result<Number, DagcalError> {
         let ast = self
+            .session
             .resolve_expr(parse_expression(source)?)
             .map_err(DagcalError::Eval)?;
-        self.context
-            .eval_expr(&ast, &self.store)
+        self::recompute::eval_once(&ast, &self.session.runtime, &self.session.results)
             .map_err(DagcalError::Eval)
     }
 
     fn recompute_constant_references(&mut self, name: &str) {
-        let roots = self.store.ids_referencing_constant(name);
-        let affected = self.recomputer.collect_affected_from(roots);
-        self.recomputer
-            .recompute_ids(affected, &mut self.store, &self.context);
+        let roots = self.session.compiled.ids_referencing_constant(name);
+        let affected = self.session.affected_by_any(roots);
+        self.session.recompute_ids(affected);
     }
 
     fn recompute_function_references(&mut self, name: &str) {
-        let roots = self.store.ids_referencing_function(name);
-        let affected = self.recomputer.collect_affected_from(roots);
-        self.recomputer
-            .recompute_ids(affected, &mut self.store, &self.context);
+        let roots = self.session.compiled.ids_referencing_function(name);
+        let affected = self.session.affected_by_any(roots);
+        self.session.recompute_ids(affected);
     }
 
     fn save_parsed_entry(
@@ -449,11 +520,11 @@ impl Engine {
         source: String,
         ast: ParsedExpr,
     ) -> Execution {
-        let entry = match self.resolve_expr(ast) {
-            Ok(ast) => Entry::from_resolved(id, name, source, ast),
-            Err(err) => Entry::from_parse_error(id, name, source, DagcalError::Eval(err)),
+        let compiled = match self.session.resolve_expr(ast) {
+            Ok(ast) => CompiledEntry::from_resolved(ast),
+            Err(err) => CompiledEntry::from_error(DagcalError::Eval(err)),
         };
-        self.save_entry(id, entry)
+        self.save_entry(id, name, source, compiled)
     }
 
     fn save_parse_error(
@@ -463,45 +534,48 @@ impl Engine {
         source: String,
         err: DagcalError,
     ) -> Execution {
-        let entry = Entry::from_parse_error(id, name, source, err);
-        self.save_entry(id, entry)
+        self.save_entry(id, name, source, CompiledEntry::from_error(err))
     }
 
-    fn save_entry(&mut self, id: ExpressionId, entry: Entry) -> Execution {
-        self.store.insert(id, entry);
-        self.recomputer.rebuild_graph(&self.store);
-        self.recomputer
-            .recompute_affected(id, &mut self.store, &self.context);
+    fn save_entry(
+        &mut self,
+        id: ExpressionId,
+        name: Option<String>,
+        source: String,
+        compiled: CompiledEntry,
+    ) -> Execution {
+        self.session
+            .entries
+            .upsert(EntryRecord::new(id, name, source));
+        self.session.compiled.insert(id, compiled);
+        self.session.rebuild_dependencies();
+        self.session.recompute_affected(id);
 
         Execution {
             id: Some(id),
             state: self
-                .store
+                .session
                 .state(id)
                 .expect("saved entry should exist")
                 .clone(),
         }
     }
 
-    fn resolve_expr(&self, expr: ParsedExpr) -> Result<crate::ast::ResolvedExpr, EvalError> {
-        resolve_expr(&self.store, self.context.constants(), expr)
-    }
-
     fn resolve_or_create_target(&mut self, target: EntryTarget) -> (ExpressionId, Option<String>) {
         match target {
             EntryTarget::Id(id) => {
-                let name = self.store.name_for_id(id).cloned();
-                self.store.reserve_id(id);
+                let name = self.session.entries.name_for_id(id).cloned();
+                self.session.entries.reserve_id(id);
                 (id, name)
             }
-            EntryTarget::Name(name) => self.store.resolve_or_create_name(name),
+            EntryTarget::Name(name) => self.session.entries.resolve_or_create_name(name),
         }
     }
 
     fn resolve_existing_target(&self, target: EntryTarget) -> Option<ExpressionId> {
         match target {
             EntryTarget::Id(id) => Some(id),
-            EntryTarget::Name(name) => self.store.name_id(&name),
+            EntryTarget::Name(name) => self.session.entries.name_id(&name),
         }
     }
 }
@@ -1112,6 +1186,21 @@ mod tests {
     }
 
     #[test]
+    fn removed_numbered_result_stays_unknown_for_later_entries() {
+        let mut engine = Engine::new();
+
+        engine.execute("2");
+        remove_entry(&mut engine, "$1");
+        let later = engine.execute("$1 + 1");
+
+        assert!(matches!(
+            later.state,
+            EntryState::Error(DagcalError::Eval(EvalError::UnknownReference(name)))
+                if name == "$1"
+        ));
+    }
+
+    #[test]
     fn appending_skips_existing_numbered_results() {
         let mut engine = Engine::new();
 
@@ -1177,15 +1266,15 @@ mod tests {
         set_entry(&mut engine, "taxed", "subtotal * 1.1").unwrap();
 
         let taxed_id = entry(&engine, "taxed").unwrap().id;
-        let taxed = engine.store.raw_entry(taxed_id).unwrap();
+        let taxed = engine.session.compiled.get(taxed_id).unwrap();
 
         assert_eq!(
-            taxed.analysis.entry_references,
+            taxed.analysis().entry_references,
             BTreeSet::from([subtotal_id])
         );
         assert!(matches!(
-            taxed.ast,
-            Some(ResolvedExpr::Binary { ref lhs, .. })
+            taxed.expr(),
+            Some(ResolvedExpr::Binary { lhs, .. })
                 if matches!(**lhs, ResolvedExpr::EntryReference(id) if id == subtotal_id)
         ));
     }
