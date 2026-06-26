@@ -14,7 +14,10 @@
 //! let total = engine.execute("subtotal + tax");
 //!
 //! assert_eq!(total.state, EntryState::Value(Number::from(110.0)));
-//! assert_eq!(engine.state("$3"), Some(&EntryState::Value(Number::from(110.0))));
+//! assert_eq!(
+//!     engine.state(total.id.unwrap()),
+//!     Some(&EntryState::Value(Number::from(110.0)))
+//! );
 //! ```
 //!
 //! The [`Engine`] owns the complete session state. When an entry is edited,
@@ -35,12 +38,13 @@
 //! - [`Engine::execute`] parses user input as either `name = expression` or a
 //!   plain expression. Named definitions update their existing entry; plain
 //!   expressions append a new `$n` result.
-//! - [`Engine::set_entry`] edits a specific target by name or `$n`. It stores
-//!   parse and evaluation failures as entry state, then returns `Err` when the
-//!   saved state is an error.
+//! - [`Engine::set_entry`] edits a target by name, `$n`, or [`ExpressionId`].
+//!   ID-specific variants such as [`Engine::set_entry_by_id`] are available
+//!   when callers already have stable IDs.
 //! - [`Engine::remove_entry`] deletes a target and recomputes entries that
 //!   depended on it. Removed `$n` references remain stable and become unknown
-//!   references until restored with [`Engine::set_entry`].
+//!   references until restored with [`Engine::set_entry`] or
+//!   [`Engine::set_entry_by_id`].
 //! - [`Engine::snapshot`] and [`Engine::restore_snapshot`] persist the original
 //!   source text, IDs, and names. Values are recomputed on restore.
 //!
@@ -59,7 +63,10 @@
 //! engine.register_fixed_function("triple", 1, |args| {
 //!     Ok(args[0].clone() * Number::from(3))
 //! });
-//! assert_eq!(engine.state("$1"), Some(&EntryState::Value(Number::from(42.0))));
+//! assert_eq!(
+//!     engine.state(before.id.unwrap()),
+//!     Some(&EntryState::Value(Number::from(42.0)))
+//! );
 //! ```
 //!
 //! Built-in functions and user functions must return finite [`Number`] values.
@@ -76,7 +83,9 @@ mod number;
 mod parser;
 mod persistence;
 
-pub use engine::{CycleDiagnostics, Engine, EntryState, EntryView, Execution};
+pub use engine::{
+    CycleDiagnostics, Engine, EntryState, EntryTarget, EntryView, Execution, IntoEntryTarget,
+};
 pub use error::{
     DagcalError, EvalError, ParseError, ParseErrorKind, PersistenceError, SourcePosition,
     SourceSpan,

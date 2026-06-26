@@ -53,10 +53,9 @@ impl Entry {
 /// Owned snapshot of one stored engine entry.
 ///
 /// `EntryView` is returned by query methods such as
-/// [`Engine::entry`](crate::Engine::entry), [`Engine::entry_by_id`](crate::Engine::entry_by_id),
-/// [`Engine::entries`](crate::Engine::entries), and
-/// [`Engine::remove_entry`](crate::Engine::remove_entry). It contains cloned
-/// data so callers can keep it after mutating the engine.
+/// [`Engine::entry`](crate::Engine::entry), [`Engine::entries`](crate::Engine::entries),
+/// and [`Engine::remove_entry`](crate::Engine::remove_entry). It contains
+/// cloned data so callers can keep it after mutating the engine.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EntryView {
     /// Stable 1-based expression ID displayed as `$n`.

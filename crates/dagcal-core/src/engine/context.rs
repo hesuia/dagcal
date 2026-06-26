@@ -74,9 +74,9 @@ fn resolve_entry_reference(id: ExpressionId, store: &EntryStore) -> Result<Numbe
     if let Some(entry) = store.entry(id) {
         match &entry.state {
             EntryState::Value(value) => Ok(value.clone()),
-            EntryState::Error(_) => Err(EvalError::DependencyError(store.display_name_for_id(id))),
+            EntryState::Error(_) => Err(EvalError::DependencyError(id.to_string())),
         }
     } else {
-        Err(EvalError::UnknownReference(format!("${}", id.value())))
+        Err(EvalError::UnknownReference(id.to_string()))
     }
 }

@@ -1,5 +1,4 @@
 use super::entry::{Entry, EntryState, EntryView};
-use super::target::EntryTarget;
 use crate::id::{ExpressionId, ExpressionIdGenerator};
 use std::collections::{BTreeSet, HashMap};
 
@@ -34,26 +33,21 @@ impl EntryStore {
         }
     }
 
-    pub(super) fn resolve_or_create_id(
+    pub(super) fn resolve_or_create_name(
         &mut self,
-        target: EntryTarget,
+        name: String,
     ) -> (ExpressionId, Option<String>) {
-        match target {
-            EntryTarget::Id(id) => {
-                self.id_generator.reserve_through(id.value());
-                let name = self.entries.get(&id).and_then(|entry| entry.name.clone());
-                (id, name)
-            }
-            EntryTarget::Name(name) => {
-                if let Some(id) = self.names.get(&name).copied() {
-                    return (id, Some(name));
-                }
-
-                let id = self.allocate_id();
-                self.names.insert(name.clone(), id);
-                (id, Some(name))
-            }
+        if let Some(id) = self.names.get(&name).copied() {
+            return (id, Some(name));
         }
+
+        let id = self.allocate_id();
+        self.names.insert(name.clone(), id);
+        (id, Some(name))
+    }
+
+    pub(super) fn reserve_id(&mut self, id: ExpressionId) {
+        self.id_generator.reserve_through(id.value());
     }
 
     pub(super) fn insert(&mut self, id: ExpressionId, entry: Entry) {
@@ -61,7 +55,7 @@ impl EntryStore {
     }
 
     pub(super) fn reserve_restored_entry(&mut self, id: ExpressionId, name: Option<&str>) {
-        self.id_generator.reserve_through(id.value());
+        self.reserve_id(id);
         if let Some(name) = name {
             self.names.insert(name.to_string(), id);
         }
@@ -83,19 +77,12 @@ impl EntryStore {
         self.entries.get_mut(&id)
     }
 
-    pub(super) fn entry_for_target(&self, target: &EntryTarget) -> Option<&Entry> {
-        self.id_for_target(target).and_then(|id| self.entry(id))
-    }
-
-    pub(super) fn id_for_target(&self, target: &EntryTarget) -> Option<ExpressionId> {
-        match target {
-            EntryTarget::Id(id) => Some(*id),
-            EntryTarget::Name(name) => self.names.get(name).copied(),
-        }
-    }
-
     pub(super) fn name_id(&self, name: &str) -> Option<ExpressionId> {
         self.names.get(name).copied()
+    }
+
+    pub(super) fn name_for_id(&self, id: ExpressionId) -> Option<&String> {
+        self.entry(id).and_then(|entry| entry.name.as_ref())
     }
 
     pub(super) fn state(&self, id: ExpressionId) -> Option<&EntryState> {
@@ -104,10 +91,6 @@ impl EntryStore {
 
     pub(super) fn entry_view(&self, id: ExpressionId) -> Option<EntryView> {
         self.entry(id).map(EntryView::from)
-    }
-
-    pub(super) fn entry_view_for_target(&self, target: &EntryTarget) -> Option<EntryView> {
-        self.entry_for_target(target).map(EntryView::from)
     }
 
     pub(super) fn entries(&self) -> Vec<EntryView> {
@@ -152,10 +135,6 @@ impl EntryStore {
                     .then_some(*id)
             })
             .collect()
-    }
-
-    pub(super) fn display_name_for_id(&self, id: ExpressionId) -> String {
-        id.to_string()
     }
 
     #[cfg(test)]

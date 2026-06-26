@@ -58,6 +58,16 @@ pub fn parse_statement(source: &str) -> Result<ParsedStatement, DagcalError> {
     }
 }
 
+pub(crate) fn is_valid_name(input: &str) -> bool {
+    let mut chars = input.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
 fn build_definition(pair: Pair<'_, Rule>) -> Result<ParsedStatement, DagcalError> {
     let mut inner = pair.into_inner();
     let name = inner.next().ok_or_else(|| {

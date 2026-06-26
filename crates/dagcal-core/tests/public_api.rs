@@ -1,9 +1,13 @@
 use dagcal_core::{
-    DagcalError, Engine, EngineSnapshot, EntryState, EvalError, Number, ParseErrorKind,
-    PersistedEntry, PersistenceError,
+    DagcalError, Engine, EngineSnapshot, EntryState, EntryTarget, EvalError, ExpressionId, Number,
+    ParseErrorKind, PersistedEntry, PersistenceError,
 };
 
-fn assert_value(engine: &Engine, target: &str, expected: f64) {
+fn id(value: usize) -> ExpressionId {
+    ExpressionId::new(value)
+}
+
+fn assert_value(engine: &Engine, target: ExpressionId, expected: f64) {
     match engine.state(target) {
         Some(EntryState::Value(actual)) => {
             assert!(
@@ -15,7 +19,11 @@ fn assert_value(engine: &Engine, target: &str, expected: f64) {
     }
 }
 
-fn assert_eval_error(engine: &Engine, target: &str, matches: impl FnOnce(&EvalError) -> bool) {
+fn assert_eval_error(
+    engine: &Engine,
+    target: ExpressionId,
+    matches: impl FnOnce(&EvalError) -> bool,
+) {
     match engine.state(target) {
         Some(EntryState::Error(DagcalError::Eval(err))) if matches(err) => {}
         other => panic!("expected eval error for {target}, got {other:?}"),
@@ -37,30 +45,102 @@ fn user_session_supports_definitions_results_edits_and_recovery() {
     assert_eq!(tax_rate.state, EntryState::Value(Number::from(0.1)));
     assert_eq!(tax.id.unwrap().to_string(), "$3");
     assert_eq!(total.id.unwrap().to_string(), "$4");
-    assert_value(&engine, "$1", 100.0);
-    assert_value(&engine, "$3", 10.0);
-    assert_value(&engine, "$4", 110.0);
+    let subtotal_id = subtotal.id.unwrap();
+    let tax_rate_id = tax_rate.id.unwrap();
+    let tax_id = tax.id.unwrap();
+    let total_id = total.id.unwrap();
+    assert_value(&engine, subtotal_id, 100.0);
+    assert_value(&engine, tax_id, 10.0);
+    assert_value(&engine, total_id, 110.0);
 
-    engine.set_entry("subtotal", "200").unwrap();
-    assert_value(&engine, "$1", 200.0);
-    assert_value(&engine, "$3", 20.0);
-    assert_value(&engine, "$4", 220.0);
+    engine.set_entry(subtotal_id, "200").unwrap();
+    assert_value(&engine, subtotal_id, 200.0);
+    assert_value(&engine, tax_id, 20.0);
+    assert_value(&engine, total_id, 220.0);
 
-    engine.remove_entry("tax_rate");
+    engine.remove_entry(tax_rate_id);
     assert_eval_error(
         &engine,
-        "$3",
+        tax_id,
         |err| matches!(err, EvalError::UnknownReference(name) if name == "$2"),
     );
     assert_eval_error(
         &engine,
-        "$4",
+        total_id,
         |err| matches!(err, EvalError::DependencyError(name) if name == "$3"),
     );
 
-    engine.set_entry("$2", "0.08").unwrap();
-    assert_value(&engine, "$3", 16.0);
-    assert_value(&engine, "$4", 216.0);
+    engine.set_entry(tax_rate_id, "0.08").unwrap();
+    assert_value(&engine, tax_id, 16.0);
+    assert_value(&engine, total_id, 216.0);
+}
+
+#[test]
+fn public_api_supports_entry_targets_and_id_specific_methods() {
+    let mut engine = Engine::new();
+
+    engine.set_entry("subtotal", "100").unwrap();
+    engine.set_entry("tax", "subtotal * 0.1").unwrap();
+    engine.set_entry("subtotal", "200").unwrap();
+
+    let subtotal_id = engine.entry("subtotal").unwrap().id;
+    let tax_id = engine.entry("tax").unwrap().id;
+
+    assert_eq!(subtotal_id, id(1));
+    assert_eq!(tax_id, id(2));
+    assert_value(&engine, subtotal_id, 200.0);
+    assert_eq!(
+        engine.state("subtotal"),
+        Some(&EntryState::Value(Number::from(200.0)))
+    );
+    assert_eq!(
+        engine.state("$2"),
+        Some(&EntryState::Value(Number::from(20.0)))
+    );
+    assert_eq!(
+        engine
+            .entry(EntryTarget::Name("tax".to_string()))
+            .unwrap()
+            .id,
+        tax_id
+    );
+
+    engine.set_entry_by_id(subtotal_id, "300").unwrap();
+    assert_value(&engine, tax_id, 30.0);
+
+    engine.remove_entry("subtotal").unwrap();
+    assert_eval_error(
+        &engine,
+        tax_id,
+        |err| matches!(err, EvalError::UnknownReference(name) if name == "$1"),
+    );
+
+    engine.set_entry("$1", "400").unwrap();
+    assert_eq!(
+        engine.entry_by_id(subtotal_id).unwrap().name.as_deref(),
+        None
+    );
+    assert_value(&engine, tax_id, 40.0);
+    assert!(engine.remove_entry_by_id(subtotal_id).is_some());
+}
+
+#[test]
+fn public_api_reports_invalid_entry_targets_as_structured_parse_errors() {
+    let mut engine = Engine::new();
+
+    let err = engine.set_entry("$0", "1").unwrap_err();
+
+    match err {
+        DagcalError::Parse(err) => {
+            assert_eq!(err.kind, ParseErrorKind::InvalidEntryTarget);
+            let span = err.span.unwrap();
+            assert_eq!(span.start.byte, 0);
+            assert_eq!(span.start.line, 1);
+            assert_eq!(span.start.column, 1);
+            assert_eq!(span.end.byte, 2);
+        }
+        other => panic!("expected parse error, got {other:?}"),
+    }
 }
 
 #[test]
@@ -83,11 +163,11 @@ fn public_api_executes_standalone_number_literals() {
     assert_eq!(octal.state, EntryState::Value(Number::from(8.5)));
     assert_eq!(hexadecimal.id.unwrap().to_string(), "$5");
     assert_eq!(hexadecimal.state, EntryState::Value(Number::from(10.9375)));
-    assert_value(&engine, "$1", 10.0);
-    assert_value(&engine, "$2", 4.2);
-    assert_value(&engine, "$3", 9.8125);
-    assert_value(&engine, "$4", 8.5);
-    assert_value(&engine, "$5", 10.9375);
+    assert_value(&engine, integer.id.unwrap(), 10.0);
+    assert_value(&engine, decimal.id.unwrap(), 4.2);
+    assert_value(&engine, binary.id.unwrap(), 9.8125);
+    assert_value(&engine, octal.id.unwrap(), 8.5);
+    assert_value(&engine, hexadecimal.id.unwrap(), 10.9375);
     assert_eq!(
         engine.eval_once("0xA.F + 0b.1").unwrap(),
         Number::from(11.4375)
@@ -128,7 +208,7 @@ fn public_api_keeps_approximate_results_at_float_boundaries() {
         EntryState::Value(Number::Float(_))
     ));
     assert!(matches!(sine.state, EntryState::Value(Number::Float(_))));
-    assert_value(&engine, "$2", 1.0);
+    assert_value(&engine, sine.id.unwrap(), 1.0);
 }
 
 #[test]
@@ -139,8 +219,10 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
     let parse_error = engine.execute("broken = 1 +");
     let cycle_a = engine.execute("a = 1");
     let cycle_b = engine.execute("b = 2");
-    engine.set_entry("a", "b + 1").unwrap();
-    assert!(engine.set_entry("b", "a + 1").is_err());
+    let cycle_a_id = cycle_a.id.unwrap();
+    let cycle_b_id = cycle_b.id.unwrap();
+    engine.set_entry(cycle_a_id, "b + 1").unwrap();
+    assert!(engine.set_entry(cycle_b_id, "a + 1").is_err());
     let dependent = engine.execute("a + base");
 
     assert_eq!(valid.state, EntryState::Value(Number::from(10.0)));
@@ -155,37 +237,19 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
     assert_eq!(cycle_a.state, EntryState::Value(Number::from(1.0)));
     assert_eq!(cycle_b.state, EntryState::Value(Number::from(2.0)));
     assert!(matches!(
-        engine.state("b"),
+        engine.state(cycle_b_id),
         Some(EntryState::Error(DagcalError::Eval(
             EvalError::CycleDetected(_)
         )))
     ));
-    assert_eq!(dependent.id.unwrap().to_string(), "$4");
+    let dependent_id = dependent.id.unwrap();
+    assert_eq!(dependent_id.to_string(), "$4");
     assert_eval_error(
         &engine,
-        "$4",
+        dependent_id,
         |err| matches!(err, EvalError::DependencyError(name) if name == "$2"),
     );
-    assert_value(&engine, "base", 10.0);
-}
-
-#[test]
-fn public_api_reports_invalid_entry_targets_as_structured_parse_errors() {
-    let mut engine = Engine::new();
-
-    let err = engine.set_entry("$0", "1").unwrap_err();
-
-    match err {
-        DagcalError::Parse(err) => {
-            assert_eq!(err.kind, ParseErrorKind::InvalidEntryTarget);
-            let span = err.span.unwrap();
-            assert_eq!(span.start.byte, 0);
-            assert_eq!(span.start.line, 1);
-            assert_eq!(span.start.column, 1);
-            assert_eq!(span.end.byte, 2);
-        }
-        other => panic!("expected parse error, got {other:?}"),
-    }
+    assert_value(&engine, valid.id.unwrap(), 10.0);
 }
 
 #[test]
@@ -200,16 +264,16 @@ fn public_api_supports_runtime_extensions_used_by_frontends() {
     assert_eq!(before_constant.id.unwrap().to_string(), "$2");
     assert_eval_error(
         &engine,
-        "$1",
+        before_function.id.unwrap(),
         |err| matches!(err, EvalError::UnknownFunction(name) if name == "triple"),
     );
-    assert_value(&engine, "$2", 3.0);
+    assert_value(&engine, before_constant.id.unwrap(), 3.0);
 
     engine.register_fixed_function("triple", 1, |args| Ok(args[0].clone() * Number::from(3)));
     engine.set_constant("tau", std::f64::consts::TAU);
 
-    assert_value(&engine, "$1", 42.0);
-    assert_value(&engine, "$2", std::f64::consts::PI);
+    assert_value(&engine, before_function.id.unwrap(), 42.0);
+    assert_value(&engine, before_constant.id.unwrap(), std::f64::consts::PI);
 }
 
 #[test]
@@ -227,12 +291,12 @@ fn public_api_normalizes_non_finite_runtime_extensions_to_math_errors() {
     assert_eq!(function.id.unwrap().to_string(), "$2");
     assert_eval_error(
         &engine,
-        "$1",
+        constant.id.unwrap(),
         |err| matches!(err, EvalError::Math(message) if message == "constant `tau` produced non-finite result"),
     );
     assert_eval_error(
         &engine,
-        "$2",
+        function.id.unwrap(),
         |err| matches!(err, EvalError::Math(message) if message == "function `explode` produced non-finite result"),
     );
 }
@@ -244,11 +308,10 @@ fn public_api_exposes_entries_for_frontend_state_rendering() {
     engine.execute("subtotal = 120");
     engine.execute("tax = subtotal * 0.1");
     let total = engine.execute("subtotal + tax");
-    let total_id_display = total.id.unwrap().to_string();
-    let total_id = engine.entry(&total_id_display).unwrap().id;
+    let total_id = total.id.unwrap();
 
     assert_eq!(
-        engine.state_by_id(total_id),
+        engine.state(total_id),
         Some(&EntryState::Value(Number::from(132.0)))
     );
 
@@ -297,21 +360,23 @@ fn public_api_keeps_numbered_results_stable_across_removal_and_append() {
     assert_eq!(first.id.unwrap().to_string(), "$1");
     assert_eq!(second.id.unwrap().to_string(), "$2");
     assert_eq!(third.id.unwrap().to_string(), "$3");
-    assert_value(&engine, "$3", 10.0);
+    let second_id = second.id.unwrap();
+    let third_id = third.id.unwrap();
+    assert_value(&engine, third_id, 10.0);
 
-    engine.remove_entry("$2");
+    engine.remove_entry(second_id);
     assert_eval_error(
         &engine,
-        "$3",
+        third_id,
         |err| matches!(err, EvalError::UnknownReference(name) if name == "$2"),
     );
 
     let fourth = engine.execute("$1 + 10");
     assert_eq!(fourth.id.unwrap().to_string(), "$4");
-    assert_value(&engine, "$4", 12.0);
+    assert_value(&engine, fourth.id.unwrap(), 12.0);
 
-    engine.set_entry("$2", "$1 + 4").unwrap();
-    assert_value(&engine, "$3", 12.0);
+    engine.set_entry(second_id, "$1 + 4").unwrap();
+    assert_value(&engine, third_id, 12.0);
 }
 
 #[test]
@@ -327,15 +392,14 @@ fn public_api_serializes_and_restores_engine_snapshots() {
     let snapshot: EngineSnapshot = serde_json::from_str(&json).unwrap();
     let mut restored = Engine::from_snapshot(snapshot).unwrap();
 
-    assert_value(&restored, "$1", 100.0);
-    assert_value(&restored, "$2", 0.1);
-    assert_value(&restored, "$3", 10.0);
-    assert_value(&restored, "$4", 110.0);
-    assert_value(&restored, "subtotal", 100.0);
+    assert_value(&restored, id(1), 100.0);
+    assert_value(&restored, id(2), 0.1);
+    assert_value(&restored, id(3), 10.0);
+    assert_value(&restored, id(4), 110.0);
 
-    restored.set_entry("subtotal", "200").unwrap();
-    assert_value(&restored, "$3", 20.0);
-    assert_value(&restored, "$4", 220.0);
+    restored.set_entry(id(1), "200").unwrap();
+    assert_value(&restored, id(3), 20.0);
+    assert_value(&restored, id(4), 220.0);
 }
 
 #[test]
@@ -345,37 +409,37 @@ fn public_api_restore_preserves_removed_id_gaps_and_next_append_id() {
     engine.execute("1");
     engine.execute("2");
     engine.execute("3");
-    engine.remove_entry("$2");
+    engine.remove_entry(id(2));
 
     let mut restored = Engine::from_snapshot(engine.snapshot()).unwrap();
     let next = restored.execute("$1 + $3");
 
-    assert!(restored.entry("$2").is_none());
+    assert!(restored.entry(id(2)).is_none());
     assert_eq!(next.id.unwrap().to_string(), "$4");
-    assert_value(&restored, "$4", 4.0);
+    assert_value(&restored, next.id.unwrap(), 4.0);
 }
 
 #[test]
 fn public_api_restore_rebuilds_cycle_diagnostics() {
     let mut engine = Engine::new();
 
-    engine.execute("a = 1");
-    engine.execute("b = 2");
-    engine.set_entry("a", "b + 1").unwrap();
-    assert!(engine.set_entry("b", "a + 1").is_err());
+    let a = engine.execute("a = 1").id.unwrap();
+    let b = engine.execute("b = 2").id.unwrap();
+    engine.set_entry(a, "b + 1").unwrap();
+    assert!(engine.set_entry(b, "a + 1").is_err());
 
     let restored = Engine::from_snapshot(engine.snapshot()).unwrap();
     let diagnostics = restored.cycle_diagnostics();
 
     assert!(matches!(
-        restored.state("a"),
+        restored.state(a),
         Some(EntryState::Error(DagcalError::Eval(
             EvalError::CycleDetected(_)
         )))
     ));
     assert_eq!(
         diagnostics.cycle_nodes,
-        ["$1".to_string(), "$2".to_string()].into_iter().collect()
+        [id(1), id(2)].into_iter().collect()
     );
 }
 
@@ -383,10 +447,11 @@ fn public_api_restore_rebuilds_cycle_diagnostics() {
 fn public_api_restore_preserves_stored_parse_error_entries() {
     let mut engine = Engine::new();
 
-    assert!(engine.set_entry("broken", "1 +").is_err());
+    let broken = engine.execute("broken = 0").id.unwrap();
+    assert!(engine.set_entry(broken, "1 +").is_err());
     let restored = Engine::from_snapshot(engine.snapshot()).unwrap();
 
-    match restored.state("broken") {
+    match restored.state(broken) {
         Some(EntryState::Error(DagcalError::Parse(err))) => {
             assert_eq!(err.kind, ParseErrorKind::Syntax);
         }

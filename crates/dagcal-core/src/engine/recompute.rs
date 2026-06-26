@@ -87,7 +87,7 @@ impl Recomputer {
 fn evaluate_entry(id: ExpressionId, store: &EntryStore, context: &EvaluationContext) -> EntryState {
     let Some(entry) = store.entry(id) else {
         return EntryState::Error(DagcalError::Eval(EvalError::UnknownReference(
-            store.display_name_for_id(id),
+            id.to_string(),
         )));
     };
 

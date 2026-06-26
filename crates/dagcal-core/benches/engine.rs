@@ -1,11 +1,18 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use dagcal_core::{Engine, EngineSnapshot, EntryState};
+use dagcal_core::{Engine, EngineSnapshot, EntryState, ExpressionId};
 use std::hint::black_box;
 
-fn assert_value(engine: &Engine, target: &str, expected: f64) {
-    match engine.state(target) {
+fn id(value: usize) -> ExpressionId {
+    ExpressionId::new(value)
+}
+
+fn assert_value(engine: &Engine, target: ExpressionId, expected: f64) {
+    match engine.state_by_id(target) {
         Some(EntryState::Value(actual)) => {
-            assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+            assert!(
+                (actual.to_f64() - expected).abs() < 1e-9,
+                "{actual} != {expected}"
+            );
         }
         other => panic!("expected value for {target}, got {other:?}"),
     }
@@ -13,7 +20,7 @@ fn assert_value(engine: &Engine, target: &str, expected: f64) {
 
 fn populate_linear_chain(engine: &mut Engine, count: usize) {
     assert!(count > 0);
-    engine.set_entry("root", "1").unwrap();
+    engine.execute("root = 1");
 
     for index in 1..count {
         let name = format!("node_{index}");
@@ -22,25 +29,23 @@ fn populate_linear_chain(engine: &mut Engine, count: usize) {
         } else {
             format!("node_{}", index - 1)
         };
-        engine.set_entry(name, format!("{previous} + 1")).unwrap();
+        engine.execute(&format!("{name} = {previous} + 1"));
     }
 }
 
 fn populate_branching_graph(engine: &mut Engine, branch_count: usize) {
     assert!(branch_count > 0);
-    engine.set_entry("root", "1").unwrap();
+    engine.execute("root = 1");
 
     for index in 0..branch_count {
-        engine
-            .set_entry(format!("branch_{index}"), format!("root + {index}"))
-            .unwrap();
+        engine.execute(&format!("branch_{index} = root + {index}"));
     }
 
     let source = (0..branch_count)
         .map(|index| format!("branch_{index}"))
         .collect::<Vec<_>>()
         .join(" + ");
-    engine.set_entry("total", source).unwrap();
+    engine.execute(&format!("total = {source}"));
 }
 
 fn build_snapshot(entry_count: usize) -> EngineSnapshot {
@@ -67,7 +72,7 @@ fn bench_execute_definition_chain(c: &mut Criterion) {
         b.iter(|| {
             let mut engine = Engine::new();
             populate_linear_chain(&mut engine, black_box(100));
-            assert_value(&engine, "node_99", 100.0);
+            assert_value(&engine, id(100), 100.0);
             black_box(engine);
         });
     });
@@ -82,8 +87,8 @@ fn bench_recompute_linear_dependents(c: &mut Criterion) {
                 engine
             },
             |mut engine| {
-                engine.set_entry("root", black_box("2")).unwrap();
-                assert_value(&engine, "node_99", 101.0);
+                engine.set_entry_by_id(id(1), black_box("2")).unwrap();
+                assert_value(&engine, id(100), 101.0);
                 black_box(engine);
             },
             criterion::BatchSize::SmallInput,
@@ -100,8 +105,8 @@ fn bench_recompute_branching_graph(c: &mut Criterion) {
                 engine
             },
             |mut engine| {
-                engine.set_entry("root", black_box("2")).unwrap();
-                assert_value(&engine, "total", 5150.0);
+                engine.set_entry_by_id(id(1), black_box("2")).unwrap();
+                assert_value(&engine, id(102), 5150.0);
                 black_box(engine);
             },
             criterion::BatchSize::SmallInput,
@@ -118,7 +123,7 @@ fn bench_snapshot_restore(c: &mut Criterion) {
             engine
                 .restore_snapshot(black_box(snapshot.clone()))
                 .unwrap();
-            assert_value(&engine, "node_99", 100.0);
+            assert_value(&engine, id(100), 100.0);
             black_box(engine);
         });
     });
