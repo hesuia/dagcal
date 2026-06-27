@@ -39,16 +39,16 @@ fn user_session_supports_definitions_results_edits_and_recovery() {
     let tax = engine.execute("subtotal * tax_rate");
     let total = engine.execute("subtotal + $3");
 
-    assert_eq!(subtotal.id.unwrap().to_string(), "$1");
+    assert_eq!(subtotal.id.to_string(), "$1");
     assert_eq!(subtotal.state, EntryState::Value(Number::from(100.0)));
-    assert_eq!(tax_rate.id.unwrap().to_string(), "$2");
+    assert_eq!(tax_rate.id.to_string(), "$2");
     assert_eq!(tax_rate.state, EntryState::Value(Number::from(0.1)));
-    assert_eq!(tax.id.unwrap().to_string(), "$3");
-    assert_eq!(total.id.unwrap().to_string(), "$4");
-    let subtotal_id = subtotal.id.unwrap();
-    let tax_rate_id = tax_rate.id.unwrap();
-    let tax_id = tax.id.unwrap();
-    let total_id = total.id.unwrap();
+    assert_eq!(tax.id.to_string(), "$3");
+    assert_eq!(total.id.to_string(), "$4");
+    let subtotal_id = subtotal.id;
+    let tax_rate_id = tax_rate.id;
+    let tax_id = tax.id;
+    let total_id = total.id;
     assert_value(&engine, subtotal_id, 100.0);
     assert_value(&engine, tax_id, 10.0);
     assert_value(&engine, total_id, 110.0);
@@ -153,21 +153,21 @@ fn public_api_executes_standalone_number_literals() {
     let octal = engine.execute("0o10.4");
     let hexadecimal = engine.execute("0xA.F");
 
-    assert_eq!(integer.id.unwrap().to_string(), "$1");
+    assert_eq!(integer.id.to_string(), "$1");
     assert_eq!(integer.state, EntryState::Value(Number::from(10.0)));
-    assert_eq!(decimal.id.unwrap().to_string(), "$2");
+    assert_eq!(decimal.id.to_string(), "$2");
     assert_eq!(decimal.state, EntryState::Value(Number::from(4.2)));
-    assert_eq!(binary.id.unwrap().to_string(), "$3");
+    assert_eq!(binary.id.to_string(), "$3");
     assert_eq!(binary.state, EntryState::Value(Number::from(9.8125)));
-    assert_eq!(octal.id.unwrap().to_string(), "$4");
+    assert_eq!(octal.id.to_string(), "$4");
     assert_eq!(octal.state, EntryState::Value(Number::from(8.5)));
-    assert_eq!(hexadecimal.id.unwrap().to_string(), "$5");
+    assert_eq!(hexadecimal.id.to_string(), "$5");
     assert_eq!(hexadecimal.state, EntryState::Value(Number::from(10.9375)));
-    assert_value(&engine, integer.id.unwrap(), 10.0);
-    assert_value(&engine, decimal.id.unwrap(), 4.2);
-    assert_value(&engine, binary.id.unwrap(), 9.8125);
-    assert_value(&engine, octal.id.unwrap(), 8.5);
-    assert_value(&engine, hexadecimal.id.unwrap(), 10.9375);
+    assert_value(&engine, integer.id, 10.0);
+    assert_value(&engine, decimal.id, 4.2);
+    assert_value(&engine, binary.id, 9.8125);
+    assert_value(&engine, octal.id, 8.5);
+    assert_value(&engine, hexadecimal.id, 10.9375);
     assert_eq!(
         engine.eval_once("0xA.F + 0b.1").unwrap(),
         Number::from(11.4375)
@@ -208,7 +208,7 @@ fn public_api_keeps_approximate_results_at_float_boundaries() {
         EntryState::Value(Number::Float(_))
     ));
     assert!(matches!(sine.state, EntryState::Value(Number::Float(_))));
-    assert_value(&engine, sine.id.unwrap(), 1.0);
+    assert_value(&engine, sine.id, 1.0);
 }
 
 #[test]
@@ -219,14 +219,14 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
     let parse_error = engine.execute("broken = 1 +");
     let cycle_a = engine.execute("a = 1");
     let cycle_b = engine.execute("b = 2");
-    let cycle_a_id = cycle_a.id.unwrap();
-    let cycle_b_id = cycle_b.id.unwrap();
+    let cycle_a_id = cycle_a.id;
+    let cycle_b_id = cycle_b.id;
     engine.set_entry(cycle_a_id, "b + 1").unwrap();
     assert!(engine.set_entry(cycle_b_id, "a + 1").is_err());
     let dependent = engine.execute("a + base");
 
     assert_eq!(valid.state, EntryState::Value(Number::from(10.0)));
-    let parse_error_id = parse_error.id.unwrap();
+    let parse_error_id = parse_error.id;
     assert_eq!(parse_error_id.to_string(), "$2");
     match parse_error.state {
         EntryState::Error(DagcalError::Parse(err)) => {
@@ -247,14 +247,14 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
             EvalError::CycleDetected(target)
         ))) if *target == cycle_b_id
     ));
-    let dependent_id = dependent.id.unwrap();
+    let dependent_id = dependent.id;
     assert_eq!(dependent_id.to_string(), "$5");
     assert_eval_error(
         &engine,
         dependent_id,
         |err| matches!(err, EvalError::DependencyError(target) if *target == id(3)),
     );
-    assert_value(&engine, valid.id.unwrap(), 10.0);
+    assert_value(&engine, valid.id, 10.0);
 }
 
 #[test]
@@ -265,20 +265,20 @@ fn public_api_supports_runtime_extensions_used_by_frontends() {
     engine.set_constant("tau", 6.0);
     let before_constant = engine.execute("tau / 2");
 
-    assert_eq!(before_function.id.unwrap().to_string(), "$1");
-    assert_eq!(before_constant.id.unwrap().to_string(), "$2");
+    assert_eq!(before_function.id.to_string(), "$1");
+    assert_eq!(before_constant.id.to_string(), "$2");
     assert_eval_error(
         &engine,
-        before_function.id.unwrap(),
+        before_function.id,
         |err| matches!(err, EvalError::UnknownFunction(name) if name == "triple"),
     );
-    assert_value(&engine, before_constant.id.unwrap(), 3.0);
+    assert_value(&engine, before_constant.id, 3.0);
 
     engine.register_fixed_function("triple", 1, |args| Ok(args[0].clone() * Number::from(3)));
     engine.set_constant("tau", std::f64::consts::TAU);
 
-    assert_value(&engine, before_function.id.unwrap(), 42.0);
-    assert_value(&engine, before_constant.id.unwrap(), std::f64::consts::PI);
+    assert_value(&engine, before_function.id, 42.0);
+    assert_value(&engine, before_constant.id, std::f64::consts::PI);
 }
 
 #[test]
@@ -292,16 +292,16 @@ fn public_api_normalizes_non_finite_runtime_extensions_to_math_errors() {
     engine.set_constant("tau", f64::NAN);
     engine.register_fixed_function("explode", 0, |_| Ok(Number::Float(f64::INFINITY)));
 
-    assert_eq!(constant.id.unwrap().to_string(), "$1");
-    assert_eq!(function.id.unwrap().to_string(), "$2");
+    assert_eq!(constant.id.to_string(), "$1");
+    assert_eq!(function.id.to_string(), "$2");
     assert_eval_error(
         &engine,
-        constant.id.unwrap(),
+        constant.id,
         |err| matches!(err, EvalError::Math(message) if message == "constant `tau` produced non-finite result"),
     );
     assert_eval_error(
         &engine,
-        function.id.unwrap(),
+        function.id,
         |err| matches!(err, EvalError::Math(message) if message == "function `explode` produced non-finite result"),
     );
 }
@@ -313,7 +313,7 @@ fn public_api_exposes_entries_for_frontend_state_rendering() {
     engine.execute("subtotal = 120");
     engine.execute("tax = subtotal * 0.1");
     let total = engine.execute("subtotal + tax");
-    let total_id = total.id.unwrap();
+    let total_id = total.id;
 
     assert_eq!(
         engine.state(total_id),
@@ -362,11 +362,11 @@ fn public_api_keeps_numbered_results_stable_across_removal_and_append() {
     let second = engine.execute("$1 + 3");
     let third = engine.execute("$1 * $2");
 
-    assert_eq!(first.id.unwrap().to_string(), "$1");
-    assert_eq!(second.id.unwrap().to_string(), "$2");
-    assert_eq!(third.id.unwrap().to_string(), "$3");
-    let second_id = second.id.unwrap();
-    let third_id = third.id.unwrap();
+    assert_eq!(first.id.to_string(), "$1");
+    assert_eq!(second.id.to_string(), "$2");
+    assert_eq!(third.id.to_string(), "$3");
+    let second_id = second.id;
+    let third_id = third.id;
     assert_value(&engine, third_id, 10.0);
 
     engine.remove_entry(second_id);
@@ -377,8 +377,8 @@ fn public_api_keeps_numbered_results_stable_across_removal_and_append() {
     );
 
     let fourth = engine.execute("$1 + 10");
-    assert_eq!(fourth.id.unwrap().to_string(), "$4");
-    assert_value(&engine, fourth.id.unwrap(), 12.0);
+    assert_eq!(fourth.id.to_string(), "$4");
+    assert_value(&engine, fourth.id, 12.0);
 
     engine.set_entry(second_id, "$1 + 4").unwrap();
     assert_value(&engine, third_id, 12.0);
@@ -420,16 +420,16 @@ fn public_api_restore_preserves_removed_id_gaps_and_next_append_id() {
     let next = restored.execute("$1 + $3");
 
     assert!(restored.entry(id(2)).is_none());
-    assert_eq!(next.id.unwrap().to_string(), "$4");
-    assert_value(&restored, next.id.unwrap(), 4.0);
+    assert_eq!(next.id.to_string(), "$4");
+    assert_value(&restored, next.id, 4.0);
 }
 
 #[test]
 fn public_api_restore_rebuilds_cycle_diagnostics() {
     let mut engine = Engine::new();
 
-    let a = engine.execute("a = 1").id.unwrap();
-    let b = engine.execute("b = 2").id.unwrap();
+    let a = engine.execute("a = 1").id;
+    let b = engine.execute("b = 2").id;
     engine.set_entry(a, "b + 1").unwrap();
     assert!(engine.set_entry(b, "a + 1").is_err());
 
@@ -452,7 +452,7 @@ fn public_api_restore_rebuilds_cycle_diagnostics() {
 fn public_api_restore_preserves_stored_parse_error_entries() {
     let mut engine = Engine::new();
 
-    let broken = engine.execute("broken = 0").id.unwrap();
+    let broken = engine.execute("broken = 0").id;
     assert!(engine.set_entry(broken, "1 +").is_err());
     let restored = Engine::from_snapshot(engine.snapshot()).unwrap();
 

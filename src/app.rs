@@ -142,12 +142,8 @@ impl App {
         }
 
         let execution = self.engine.execute(&source);
-        if let Some(id) = execution.id {
-            self.select_id(id);
-            self.status = format!("{id} = {}", state_summary(&execution.state));
-        } else {
-            self.status = state_summary(&execution.state);
-        }
+        self.select_id(execution.id);
+        self.status = format!("{} = {}", execution.id, state_summary(&execution.state));
         self.finish_input();
     }
 

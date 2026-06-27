@@ -149,10 +149,7 @@ fn print_state(id: &str, state: &EntryState) {
 }
 
 fn print_execution(execution: &Execution) {
-    match execution.id {
-        Some(id) => print_state(&id.to_string(), &execution.state),
-        None => print_state_value(&execution.state),
-    }
+    print_state(&execution.id.to_string(), &execution.state);
 }
 
 fn print_state_value(state: &EntryState) {

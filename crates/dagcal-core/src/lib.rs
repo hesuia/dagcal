@@ -15,7 +15,7 @@
 //!
 //! assert_eq!(total.state, EntryState::Value(Number::from(110.0)));
 //! assert_eq!(
-//!     engine.state(total.id.unwrap()),
+//!     engine.state(total.id),
 //!     Some(&EntryState::Value(Number::from(110.0)))
 //! );
 //! ```
@@ -64,7 +64,7 @@
 //!     Ok(args[0].clone() * Number::from(3))
 //! });
 //! assert_eq!(
-//!     engine.state(before.id.unwrap()),
+//!     engine.state(before.id),
 //!     Some(&EntryState::Value(Number::from(42.0)))
 //! );
 //! ```

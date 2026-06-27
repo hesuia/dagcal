@@ -161,8 +161,8 @@ impl Session {
 /// use dagcal_core::{Engine, EntryState, Number};
 ///
 /// let mut engine = Engine::new();
-/// let subtotal = engine.execute("subtotal = 100").id.unwrap();
-/// let tax = engine.execute("tax = subtotal * 0.1").id.unwrap();
+/// let subtotal = engine.execute("subtotal = 100").id;
+/// let tax = engine.execute("tax = subtotal * 0.1").id;
 ///
 /// assert_eq!(engine.state("tax"), Some(&EntryState::Value(Number::from(10.0))));
 ///
@@ -551,7 +551,7 @@ impl Engine {
         self.session.recompute_affected(id);
 
         Execution {
-            id: Some(id),
+            id,
             state: self
                 .session
                 .state(id)
@@ -652,9 +652,7 @@ mod tests {
             id
         } else {
             let execution = engine.execute(&format!("{target} = 0"));
-            execution
-                .id
-                .expect("valid named target should create an entry")
+            execution.id
         };
         Engine::set_entry(engine, id, source)
     }
@@ -704,11 +702,7 @@ mod tests {
     }
 
     fn execution_id_display(execution: &Execution) -> String {
-        execution
-            .id
-            .as_ref()
-            .expect("expected saved execution id")
-            .to_string()
+        execution.id.to_string()
     }
 
     #[test]

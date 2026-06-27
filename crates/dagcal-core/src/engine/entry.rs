@@ -34,13 +34,12 @@ pub enum EntryState {
 
 /// Result returned after executing or setting an entry.
 ///
-/// When an entry is saved, `id` is `Some` and identifies the affected entry.
 /// [`Engine::execute`](crate::Engine::execute) saves statement-level parse
 /// errors as unnamed entries so their original source can be edited later.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Execution {
-    /// ID of the saved or edited entry, if one was stored.
-    pub id: Option<ExpressionId>,
+    /// ID of the saved or edited entry.
+    pub id: ExpressionId,
     /// Final state of the execution target.
     pub state: EntryState,
 }
