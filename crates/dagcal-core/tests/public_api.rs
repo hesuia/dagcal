@@ -1,6 +1,6 @@
 use dagcal_core::{
     DagcalError, Engine, EngineSnapshot, EntryState, EntryTarget, EvalError, ExpressionId, Number,
-    ParseErrorKind, PersistedEntry, PersistenceError,
+    ParseErrorKind, PersistedEntry, PersistenceError, ReferenceTarget,
 };
 
 fn id(value: usize) -> ExpressionId {
@@ -62,12 +62,12 @@ fn user_session_supports_definitions_results_edits_and_recovery() {
     assert_eval_error(
         &engine,
         tax_id,
-        |err| matches!(err, EvalError::UnknownReference(name) if name == "$2"),
+        |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Id(target)) if *target == id(2)),
     );
     assert_eval_error(
         &engine,
         total_id,
-        |err| matches!(err, EvalError::DependencyError(name) if name == "$3"),
+        |err| matches!(err, EvalError::DependencyError(target) if *target == id(3)),
     );
 
     engine.set_entry(tax_rate_id, "0.08").unwrap();
@@ -112,7 +112,7 @@ fn public_api_supports_entry_targets_and_id_specific_methods() {
     assert_eval_error(
         &engine,
         tax_id,
-        |err| matches!(err, EvalError::UnknownReference(name) if name == "$1"),
+        |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Id(target)) if *target == id(1)),
     );
 
     engine.set_entry("$1", "400").unwrap();
@@ -244,15 +244,15 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
     assert!(matches!(
         engine.state(cycle_b_id),
         Some(EntryState::Error(DagcalError::Eval(
-            EvalError::CycleDetected(_)
-        )))
+            EvalError::CycleDetected(target)
+        ))) if *target == cycle_b_id
     ));
     let dependent_id = dependent.id.unwrap();
     assert_eq!(dependent_id.to_string(), "$5");
     assert_eval_error(
         &engine,
         dependent_id,
-        |err| matches!(err, EvalError::DependencyError(name) if name == "$3"),
+        |err| matches!(err, EvalError::DependencyError(target) if *target == id(3)),
     );
     assert_value(&engine, valid.id.unwrap(), 10.0);
 }
@@ -373,7 +373,7 @@ fn public_api_keeps_numbered_results_stable_across_removal_and_append() {
     assert_eval_error(
         &engine,
         third_id,
-        |err| matches!(err, EvalError::UnknownReference(name) if name == "$2"),
+        |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Id(target)) if *target == id(2)),
     );
 
     let fourth = engine.execute("$1 + 10");
@@ -439,8 +439,8 @@ fn public_api_restore_rebuilds_cycle_diagnostics() {
     assert!(matches!(
         restored.state(a),
         Some(EntryState::Error(DagcalError::Eval(
-            EvalError::CycleDetected(_)
-        )))
+            EvalError::CycleDetected(target)
+        ))) if *target == a
     ));
     assert_eq!(
         diagnostics.cycle_nodes,

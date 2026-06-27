@@ -1,4 +1,5 @@
 use crate::function::FunctionSignature;
+use crate::id::ExpressionId;
 use std::fmt;
 use thiserror::Error;
 
@@ -164,7 +165,7 @@ pub enum EvalError {
     /// A name or `$n` reference could not be resolved to a stored entry or
     /// constant.
     #[error("unknown reference `{0}`")]
-    UnknownReference(String),
+    UnknownReference(ReferenceTarget),
 
     /// A called function name is not registered.
     #[error("unknown function `{0}`")]
@@ -192,14 +193,46 @@ pub enum EvalError {
     /// This expression could not run because a referenced entry is currently
     /// in an error state.
     #[error("dependency `{0}` failed")]
-    DependencyError(String),
+    DependencyError(ExpressionId),
 
     /// This expression participates in, or is blocked by, a dependency cycle.
     #[error("cycle detected involving `{0}`")]
-    CycleDetected(String),
+    CycleDetected(ExpressionId),
 
     /// Numeric evaluation failed, including non-finite constants or function
     /// results.
     #[error("{0}")]
     Math(String),
+}
+
+/// User-facing reference target carried by structured evaluation errors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReferenceTarget {
+    /// Stable stored expression ID, displayed as `$n`.
+    Id(ExpressionId),
+    /// Unresolved name as written in the expression.
+    Name(String),
+}
+
+impl fmt::Display for ReferenceTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Id(id) => id.fmt(f),
+            Self::Name(name) => f.write_str(name),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reference_target_displays_like_user_references() {
+        assert_eq!(ReferenceTarget::Id(ExpressionId::new(3)).to_string(), "$3");
+        assert_eq!(
+            ReferenceTarget::Name("subtotal".to_string()).to_string(),
+            "subtotal"
+        );
+    }
 }

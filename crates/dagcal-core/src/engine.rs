@@ -638,6 +638,7 @@ fn validate_snapshot(snapshot: EngineSnapshot) -> Result<Vec<PersistedEntry>, Da
 mod tests {
     use super::*;
     use crate::ast::ResolvedExpr;
+    use crate::error::ReferenceTarget;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -747,7 +748,7 @@ mod tests {
         assert_eval_error(
             &engine,
             "b",
-            |err| matches!(err, EvalError::UnknownReference(name) if name == "$1"),
+            |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Id(id)) if *id == ExpressionId::new(1)),
         );
     }
 
@@ -764,7 +765,7 @@ mod tests {
         assert_eval_error(
             &engine,
             "x",
-            |err| matches!(err, EvalError::UnknownReference(name) if name == "$1"),
+            |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Id(id)) if *id == ExpressionId::new(1)),
         );
     }
 
@@ -779,7 +780,7 @@ mod tests {
         assert_eval_error(
             &engine,
             "b",
-            |err| matches!(err, EvalError::DependencyError(name) if name == "$1"),
+            |err| matches!(err, EvalError::DependencyError(id) if *id == ExpressionId::new(1)),
         );
 
         set_entry(&mut engine, "a", "10").unwrap();
@@ -831,12 +832,12 @@ mod tests {
         assert_eval_error(
             &engine,
             "net",
-            |err| matches!(err, EvalError::UnknownReference(name) if name == "$3"),
+            |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Id(id)) if *id == ExpressionId::new(3)),
         );
         assert_eval_error(
             &engine,
             "summary",
-            |err| matches!(err, EvalError::DependencyError(name) if name == "$5"),
+            |err| matches!(err, EvalError::DependencyError(id) if *id == ExpressionId::new(5)),
         );
 
         set_entry(&mut engine, "$3", "8").unwrap();
@@ -854,7 +855,7 @@ mod tests {
         assert_eval_error(
             &engine,
             "summary",
-            |err| matches!(err, EvalError::DependencyError(name) if name == "$6"),
+            |err| matches!(err, EvalError::DependencyError(id) if *id == ExpressionId::new(6)),
         );
 
         set_entry(&mut engine, "quantity", "4").unwrap();
@@ -875,8 +876,8 @@ mod tests {
         assert!(matches!(
             state(&engine, "b"),
             Some(EntryState::Error(DagcalError::Eval(
-                EvalError::DependencyError(name)
-            ))) if name == "$1"
+                EvalError::DependencyError(id)
+            ))) if *id == ExpressionId::new(1)
         ));
     }
 
@@ -906,7 +907,7 @@ mod tests {
         assert_eval_error(
             &engine,
             "a",
-            |err| matches!(err, EvalError::CycleDetected(name) if name == "$1"),
+            |err| matches!(err, EvalError::CycleDetected(id) if *id == ExpressionId::new(1)),
         );
 
         let diagnostics = engine.cycle_diagnostics();
@@ -952,12 +953,12 @@ mod tests {
         assert_eval_error(
             &engine,
             "c",
-            |err| matches!(err, EvalError::DependencyError(name) if name == "$1"),
+            |err| matches!(err, EvalError::DependencyError(id) if *id == ExpressionId::new(1)),
         );
         assert_eval_error(
             &engine,
             "d",
-            |err| matches!(err, EvalError::DependencyError(name) if name == "$3"),
+            |err| matches!(err, EvalError::DependencyError(id) if *id == ExpressionId::new(3)),
         );
         assert_value(&engine, "ok", 10.0);
     }
@@ -1041,12 +1042,12 @@ mod tests {
         assert_eval_error(
             &engine,
             "cycle_left",
-            |err| matches!(err, EvalError::CycleDetected(name) if name == "$3"),
+            |err| matches!(err, EvalError::CycleDetected(id) if *id == ExpressionId::new(3)),
         );
         assert_eval_error(
             &engine,
             "cycle_right",
-            |err| matches!(err, EvalError::CycleDetected(name) if name == "$4"),
+            |err| matches!(err, EvalError::CycleDetected(id) if *id == ExpressionId::new(4)),
         );
     }
 
@@ -1177,17 +1178,17 @@ mod tests {
         assert_eval_error(
             &engine,
             "$3",
-            |err| matches!(err, EvalError::UnknownReference(name) if name == "$2"),
+            |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Id(id)) if *id == ExpressionId::new(2)),
         );
         assert_eval_error(
             &engine,
             "$4",
-            |err| matches!(err, EvalError::UnknownReference(name) if name == "$2"),
+            |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Id(id)) if *id == ExpressionId::new(2)),
         );
         assert_eval_error(
             &engine,
             "$5",
-            |err| matches!(err, EvalError::DependencyError(name) if name == "$4"),
+            |err| matches!(err, EvalError::DependencyError(id) if *id == ExpressionId::new(4)),
         );
 
         set_entry(&mut engine, "$2", "$1 + 6").unwrap();
@@ -1217,8 +1218,8 @@ mod tests {
 
         assert!(matches!(
             later.state,
-            EntryState::Error(DagcalError::Eval(EvalError::UnknownReference(name)))
-                if name == "$1"
+            EntryState::Error(DagcalError::Eval(EvalError::UnknownReference(ReferenceTarget::Id(id))))
+                if id == ExpressionId::new(1)
         ));
     }
 
@@ -1494,7 +1495,7 @@ mod tests {
         assert_eval_error(
             &engine,
             "area",
-            |err| matches!(err, EvalError::UnknownReference(name) if name == "tau"),
+            |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Name(name)) if name == "tau"),
         );
     }
 }

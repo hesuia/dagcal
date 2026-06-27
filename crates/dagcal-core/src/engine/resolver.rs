@@ -1,6 +1,6 @@
 use super::symbol::{ResolvedSymbol, SymbolResolver};
 use crate::ast::{ParsedExpr, ParsedReference, ResolvedExpr};
-use crate::error::EvalError;
+use crate::error::{EvalError, ReferenceTarget};
 
 pub(super) fn resolve_expr<R>(resolver: &R, expr: ParsedExpr) -> Result<ResolvedExpr, EvalError>
 where
@@ -37,7 +37,7 @@ where
         ParsedReference::Name(name) => match resolver.resolve_name(&name) {
             Some(ResolvedSymbol::Entry(id)) => Ok(ResolvedExpr::EntryReference(id)),
             Some(ResolvedSymbol::Constant(name)) => Ok(ResolvedExpr::Constant(name)),
-            None => Err(EvalError::UnknownReference(name)),
+            None => Err(EvalError::UnknownReference(ReferenceTarget::Name(name))),
         },
     }
 }

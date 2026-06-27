@@ -96,7 +96,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::DagcalError;
+    use crate::error::{DagcalError, ReferenceTarget};
     use crate::function::FunctionSignature;
     use std::collections::HashMap;
 
@@ -124,13 +124,13 @@ mod tests {
         let mut resolve_entry = |id: ExpressionId| {
             refs.get(&id)
                 .cloned()
-                .ok_or_else(|| EvalError::UnknownReference(format!("${}", id.value())))
+                .ok_or_else(|| EvalError::UnknownReference(ReferenceTarget::Id(id)))
         };
         let mut resolve_constant = |name: &str| {
             constants
                 .get(name)
                 .cloned()
-                .ok_or_else(|| EvalError::UnknownReference(name.to_string()))
+                .ok_or_else(|| EvalError::UnknownReference(ReferenceTarget::Name(name.to_string())))
         };
 
         eval_expr(expr, functions, &mut resolve_entry, &mut resolve_constant)
@@ -283,7 +283,7 @@ mod tests {
         assert_eq!(eval_standard("1 % 0"), Err(EvalError::RemainderByZero));
         assert!(matches!(
             eval_standard("missing + 1"),
-            Err(EvalError::UnknownReference(name)) if name == "missing"
+            Err(EvalError::UnknownReference(ReferenceTarget::Name(name))) if name == "missing"
         ));
         assert!(matches!(
             eval_standard("nope(1)"),
@@ -337,7 +337,7 @@ mod tests {
                 &[],
                 &functions
             ),
-            Err(EvalError::UnknownReference(name)) if name == "missing"
+            Err(EvalError::UnknownReference(ReferenceTarget::Name(name))) if name == "missing"
         ));
     }
 

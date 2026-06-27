@@ -87,8 +87,8 @@ pub use engine::{
     CycleDiagnostics, Engine, EntryState, EntryTarget, EntryView, Execution, IntoEntryTarget,
 };
 pub use error::{
-    DagcalError, EvalError, ParseError, ParseErrorKind, PersistenceError, SourcePosition,
-    SourceSpan,
+    DagcalError, EvalError, ParseError, ParseErrorKind, PersistenceError, ReferenceTarget,
+    SourcePosition, SourceSpan,
 };
 pub use function::FunctionSignature;
 pub use id::ExpressionId;

@@ -3,7 +3,7 @@ use super::dependencies::DependencyIndex;
 use super::entry::EntryState;
 use super::results::ResultCache;
 use super::runtime::RuntimeEnvironment;
-use crate::error::{DagcalError, EvalError};
+use crate::error::{DagcalError, EvalError, ReferenceTarget};
 use crate::eval::eval_expr;
 use crate::id::ExpressionId;
 use crate::number::Number;
@@ -56,7 +56,7 @@ impl<'a> EvaluationRunner<'a> {
         for id in ids.intersection(&cycle_nodes) {
             results.set(
                 *id,
-                EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(id.to_string()))),
+                EntryState::Error(DagcalError::Eval(EvalError::CycleDetected(*id))),
             );
         }
 
@@ -76,7 +76,7 @@ impl<'a> EvaluationRunner<'a> {
     fn evaluate_entry(&self, id: ExpressionId, results: &ResultCache) -> EntryState {
         let Some(compiled) = self.compiled.get(id) else {
             return EntryState::Error(DagcalError::Eval(EvalError::UnknownReference(
-                id.to_string(),
+                ReferenceTarget::Id(id),
             )));
         };
 
@@ -85,16 +85,14 @@ impl<'a> EvaluationRunner<'a> {
         }
 
         let Some(expr) = compiled.expr() else {
-            return EntryState::Error(DagcalError::Eval(EvalError::DependencyError(
-                id.to_string(),
-            )));
+            return EntryState::Error(DagcalError::Eval(EvalError::DependencyError(id)));
         };
 
         let mut resolve_entry = |id| resolve_entry_reference(id, results);
         let mut resolve_constant = |name: &str| {
             self.runtime
                 .constant(name)
-                .ok_or_else(|| EvalError::UnknownReference(name.to_string()))
+                .ok_or_else(|| EvalError::UnknownReference(ReferenceTarget::Name(name.to_string())))
         };
 
         match eval_expr(
@@ -118,7 +116,7 @@ pub(super) fn eval_once(
     let mut resolve_constant = |name: &str| {
         runtime
             .constant(name)
-            .ok_or_else(|| EvalError::UnknownReference(name.to_string()))
+            .ok_or_else(|| EvalError::UnknownReference(ReferenceTarget::Name(name.to_string())))
     };
 
     eval_expr(
@@ -133,9 +131,9 @@ fn resolve_entry_reference(id: ExpressionId, results: &ResultCache) -> Result<Nu
     if let Some(state) = results.get(id) {
         match state {
             EntryState::Value(value) => Ok(value.clone()),
-            EntryState::Error(_) => Err(EvalError::DependencyError(id.to_string())),
+            EntryState::Error(_) => Err(EvalError::DependencyError(id)),
         }
     } else {
-        Err(EvalError::UnknownReference(id.to_string()))
+        Err(EvalError::UnknownReference(ReferenceTarget::Id(id)))
     }
 }
