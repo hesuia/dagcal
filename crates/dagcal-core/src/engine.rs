@@ -487,6 +487,8 @@ impl Engine {
     ///
     /// Removed entries are not included. The returned views are owned snapshots
     /// of the engine state at the time of the call.
+    ///
+    /// This method uses `clone` to return a vector of owned [`EntryView`] values. Callers that need to iterate over entries without cloning can use [`Engine::entry_ids`] and [`Engine::entry_by_id`].
     pub fn entries(&self) -> Vec<EntryView> {
         self.session.entries()
     }
