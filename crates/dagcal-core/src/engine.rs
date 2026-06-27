@@ -275,12 +275,11 @@ impl Engine {
     ///
     /// Named definitions update or create the named entry. The stored source for
     /// a definition is the expression on the right side of `=`, not the complete
-    /// input line. Plain expressions are appended as the next available `$n`
-    /// result entry.
+    /// input line. Plain expressions and statement-level parse errors are
+    /// appended as the next available `$n` result entry.
     ///
-    /// A statement-level parse error is not saved because the engine cannot
-    /// determine a reliable target. In that case the returned [`Execution`] has
-    /// `id: None` and an [`EntryState::Error`].
+    /// A statement-level parse error is saved as an unnamed error entry so the
+    /// original input can be edited later.
     pub fn execute(&mut self, input: &str) -> Execution {
         match parse_statement(input) {
             Ok(ParsedStatement::Definition { name, expr }) => {
@@ -292,10 +291,10 @@ impl Engine {
                 let id = self.session.entries.allocate_id();
                 self.save_parsed_entry(id, None, input.trim().to_string(), expr)
             }
-            Err(err) => Execution {
-                id: None,
-                state: EntryState::Error(err),
-            },
+            Err(err) => {
+                let id = self.session.entries.allocate_id();
+                self.save_parse_error(id, None, input.trim().to_string(), err)
+            }
         }
     }
 
@@ -1074,17 +1073,40 @@ mod tests {
     }
 
     #[test]
-    fn execute_rejects_result_label_definitions_without_saving() {
+    fn execute_saves_statement_parse_errors_as_numbered_entries() {
         let mut engine = Engine::new();
 
         let execution = engine.execute("$1 = 100");
 
-        assert!(execution.id.is_none());
+        assert_eq!(execution_id_display(&execution), "$1");
         assert!(matches!(
             execution.state,
             EntryState::Error(DagcalError::Parse(_))
         ));
-        assert!(entry(&engine, "$1").is_none());
+        let entry = entry(&engine, "$1").expect("parse error should be saved");
+        assert_eq!(entry.source, "$1 = 100");
+        assert!(matches!(
+            entry.state,
+            EntryState::Error(DagcalError::Parse(_))
+        ));
+    }
+
+    #[test]
+    fn saved_statement_parse_errors_recover_after_edit() {
+        let mut engine = Engine::new();
+
+        let execution = engine.execute("1 +");
+
+        assert_eq!(execution_id_display(&execution), "$1");
+        assert!(matches!(
+            execution.state,
+            EntryState::Error(DagcalError::Parse(_))
+        ));
+        assert_eq!(entry(&engine, "$1").unwrap().source, "1 +");
+
+        set_entry(&mut engine, "$1", "100").unwrap();
+
+        assert_value(&engine, "$1", 100.0);
     }
 
     #[test]

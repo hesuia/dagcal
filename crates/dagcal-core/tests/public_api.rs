@@ -226,7 +226,8 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
     let dependent = engine.execute("a + base");
 
     assert_eq!(valid.state, EntryState::Value(Number::from(10.0)));
-    assert!(parse_error.id.is_none());
+    let parse_error_id = parse_error.id.unwrap();
+    assert_eq!(parse_error_id.to_string(), "$2");
     match parse_error.state {
         EntryState::Error(DagcalError::Parse(err)) => {
             assert_eq!(err.kind, ParseErrorKind::Syntax);
@@ -234,6 +235,10 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
         }
         other => panic!("expected parse error, got {other:?}"),
     }
+    assert!(matches!(
+        engine.state(parse_error_id),
+        Some(EntryState::Error(DagcalError::Parse(_)))
+    ));
     assert_eq!(cycle_a.state, EntryState::Value(Number::from(1.0)));
     assert_eq!(cycle_b.state, EntryState::Value(Number::from(2.0)));
     assert!(matches!(
@@ -243,11 +248,11 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
         )))
     ));
     let dependent_id = dependent.id.unwrap();
-    assert_eq!(dependent_id.to_string(), "$4");
+    assert_eq!(dependent_id.to_string(), "$5");
     assert_eval_error(
         &engine,
         dependent_id,
-        |err| matches!(err, EvalError::DependencyError(name) if name == "$2"),
+        |err| matches!(err, EvalError::DependencyError(name) if name == "$3"),
     );
     assert_value(&engine, valid.id.unwrap(), 10.0);
 }
