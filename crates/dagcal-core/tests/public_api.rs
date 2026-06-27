@@ -1,6 +1,7 @@
 use dagcal_core::{
-    DagcalError, Engine, EngineSnapshot, EntryState, EntryTarget, EvalError, ExpressionId, Number,
-    ParseErrorKind, PersistedEntry, PersistenceError, ReferenceTarget,
+    CompletionKind, DagcalError, Engine, EngineSnapshot, EntryState, EntryTarget, EvalError,
+    ExpressionId, Number, ParseErrorKind, PersistedEntry, PersistenceError, PreviewState,
+    ReferenceTarget,
 };
 
 fn id(value: usize) -> ExpressionId {
@@ -105,7 +106,12 @@ fn public_api_supports_entry_targets_and_id_specific_methods() {
         tax_id
     );
 
-    engine.set_entry_by_id(subtotal_id, "300").unwrap();
+    assert!(
+        engine
+            .set_entry_by_id(subtotal_id, "300")
+            .target_error
+            .is_none()
+    );
     assert_value(&engine, tax_id, 30.0);
 
     engine.remove_entry("subtotal").unwrap();
@@ -141,6 +147,51 @@ fn public_api_reports_invalid_entry_targets_as_structured_parse_errors() {
         }
         other => panic!("expected parse error, got {other:?}"),
     }
+}
+
+#[test]
+fn public_api_set_entry_reports_saved_target_errors_without_losing_execution() {
+    let mut engine = Engine::new();
+
+    let valid = engine.set_entry("subtotal", "100").unwrap();
+    assert_eq!(valid.execution.id, id(1));
+    assert!(valid.target_error.is_none());
+
+    let broken = engine.set_entry("subtotal", "1 +").unwrap();
+
+    assert_eq!(broken.execution.id, id(1));
+    assert_eq!(broken.execution.affected_ids, [id(1)].into_iter().collect());
+    assert!(matches!(broken.target_error, Some(DagcalError::Parse(_))));
+    assert!(matches!(
+        engine.state("subtotal"),
+        Some(EntryState::Error(DagcalError::Parse(_)))
+    ));
+}
+
+#[test]
+fn public_api_set_entry_by_id_returns_execution_for_error_states() {
+    let mut engine = Engine::new();
+
+    let base = engine.execute("base = 10").id;
+    let dependent = engine.execute("base * 2").id;
+
+    let result = engine.set_entry_by_id(base, "1 +");
+
+    assert_eq!(result.execution.id, base);
+    assert_eq!(
+        result.execution.affected_ids,
+        [base, dependent].into_iter().collect()
+    );
+    assert!(result.target_error.is_some());
+    assert!(matches!(
+        engine.state(base),
+        Some(EntryState::Error(DagcalError::Parse(_)))
+    ));
+    assert_eval_error(
+        &engine,
+        dependent,
+        |err| matches!(err, EvalError::DependencyError(target) if *target == base),
+    );
 }
 
 #[test]
@@ -222,7 +273,13 @@ fn public_api_reports_parse_and_cycle_errors_without_losing_valid_entries() {
     let cycle_a_id = cycle_a.id;
     let cycle_b_id = cycle_b.id;
     engine.set_entry(cycle_a_id, "b + 1").unwrap();
-    assert!(engine.set_entry(cycle_b_id, "a + 1").is_err());
+    assert!(
+        engine
+            .set_entry(cycle_b_id, "a + 1")
+            .unwrap()
+            .target_error
+            .is_some()
+    );
     let dependent = engine.execute("a + base");
 
     assert_eq!(valid.state, EntryState::Value(Number::from(10.0)));
@@ -367,9 +424,10 @@ fn public_api_reports_changed_entries_for_frontend_updates() {
     assert_eq!(total.affected_ids, [id(3)].into_iter().collect());
 
     let updated = engine.set_entry("subtotal", "200").unwrap();
-    assert_eq!(updated.id, subtotal.id);
+    assert_eq!(updated.execution.id, subtotal.id);
+    assert!(updated.target_error.is_none());
     assert_eq!(
-        updated.affected_ids,
+        updated.execution.affected_ids,
         [subtotal.id, tax.id, total.id].into_iter().collect()
     );
     assert_value(&engine, tax.id, 20.0);
@@ -458,6 +516,87 @@ fn public_api_exposes_dependency_queries_by_expression_id() {
 }
 
 #[test]
+fn public_api_previews_expressions_without_mutating_engine_state() {
+    let mut engine = Engine::new();
+
+    let subtotal = engine.execute("subtotal = 100").id;
+    engine.set_constant("tau", std::f64::consts::TAU);
+    engine.register_fixed_function("triple", 1, |args| Ok(args[0].clone() * Number::from(3)));
+    let before_count = engine.entry_count();
+
+    let preview = engine.preview_expression("subtotal + tau + triple(2)");
+
+    assert_eq!(preview.source, "subtotal + tau + triple(2)");
+    assert_eq!(preview.state, PreviewState::Valid);
+    assert_eq!(preview.entry_references, [subtotal].into_iter().collect());
+    assert_eq!(
+        preview.constant_references,
+        ["tau".to_string()].into_iter().collect()
+    );
+    assert_eq!(
+        preview.function_references,
+        ["triple".to_string()].into_iter().collect()
+    );
+    assert_eq!(engine.entry_count(), before_count);
+}
+
+#[test]
+fn public_api_previews_parse_and_resolve_errors_without_mutating_engine_state() {
+    let mut engine = Engine::new();
+
+    engine.execute("base = 10");
+    let before = engine.snapshot();
+
+    let parse_error = engine.preview_expression("1 +");
+    assert!(matches!(
+        parse_error.state,
+        PreviewState::Error(DagcalError::Parse(_))
+    ));
+
+    let resolve_error = engine.preview_expression("missing + 1");
+    assert!(matches!(
+        resolve_error.state,
+        PreviewState::Error(DagcalError::Eval(EvalError::UnknownReference(
+            ReferenceTarget::Name(name)
+        ))) if name == "missing"
+    ));
+    assert_eq!(engine.snapshot(), before);
+}
+
+#[test]
+fn public_api_exposes_completion_items_for_frontends() {
+    let mut engine = Engine::new();
+
+    let subtotal = engine.execute("subtotal = 100").id;
+    let plain = engine.execute("subtotal * 2").id;
+    engine.set_constant("tau", std::f64::consts::TAU);
+    engine.register_fixed_function("triple", 1, |args| Ok(args[0].clone() * Number::from(3)));
+
+    let items = engine.completion_items();
+
+    assert!(items.iter().any(|item| {
+        item.kind == CompletionKind::Entry
+            && item.label == "subtotal"
+            && item.detail == Some(subtotal.to_string())
+    }));
+    assert!(items.iter().any(|item| {
+        item.kind == CompletionKind::Result
+            && item.label == plain.to_string()
+            && item.detail.is_none()
+    }));
+    assert!(
+        items
+            .iter()
+            .any(|item| { item.kind == CompletionKind::Constant && item.label == "tau" })
+    );
+    assert!(items.iter().any(|item| {
+        item.kind == CompletionKind::Function
+            && item.label == "triple"
+            && item.detail.as_deref() == Some("1 argument(s)")
+    }));
+}
+
+#[test]
 fn public_api_keeps_numbered_results_stable_across_removal_and_append() {
     let mut engine = Engine::new();
 
@@ -483,7 +622,13 @@ fn public_api_keeps_numbered_results_stable_across_removal_and_append() {
     assert_eq!(fourth.id.to_string(), "$4");
     assert_value(&engine, fourth.id, 12.0);
 
-    engine.set_entry(second_id, "$1 + 4").unwrap();
+    assert!(
+        engine
+            .set_entry(second_id, "$1 + 4")
+            .unwrap()
+            .target_error
+            .is_none()
+    );
     assert_value(&engine, third_id, 12.0);
 }
 
@@ -505,7 +650,13 @@ fn public_api_serializes_and_restores_engine_snapshots() {
     assert_value(&restored, id(3), 10.0);
     assert_value(&restored, id(4), 110.0);
 
-    restored.set_entry(id(1), "200").unwrap();
+    assert!(
+        restored
+            .set_entry(id(1), "200")
+            .unwrap()
+            .target_error
+            .is_none()
+    );
     assert_value(&restored, id(3), 20.0);
     assert_value(&restored, id(4), 220.0);
 }
@@ -534,7 +685,7 @@ fn public_api_restore_rebuilds_cycle_diagnostics() {
     let a = engine.execute("a = 1").id;
     let b = engine.execute("b = 2").id;
     engine.set_entry(a, "b + 1").unwrap();
-    assert!(engine.set_entry(b, "a + 1").is_err());
+    assert!(engine.set_entry(b, "a + 1").unwrap().target_error.is_some());
 
     let restored = Engine::from_snapshot(engine.snapshot()).unwrap();
     let diagnostics = restored.cycle_diagnostics();
@@ -556,7 +707,13 @@ fn public_api_restore_preserves_stored_parse_error_entries() {
     let mut engine = Engine::new();
 
     let broken = engine.execute("broken = 0").id;
-    assert!(engine.set_entry(broken, "1 +").is_err());
+    assert!(
+        engine
+            .set_entry(broken, "1 +")
+            .unwrap()
+            .target_error
+            .is_some()
+    );
     let restored = Engine::from_snapshot(engine.snapshot()).unwrap();
 
     match restored.state(broken) {

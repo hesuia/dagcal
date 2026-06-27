@@ -18,7 +18,7 @@ use self::results::ResultCache;
 use self::runtime::RuntimeEnvironment;
 use self::symbol::SymbolTable;
 pub use self::target::{EntryTarget, IntoEntryTarget};
-use crate::ast::{ParsedExpr, ParsedStatement};
+use crate::ast::{ExpressionAnalysis, ParsedExpr, ParsedStatement};
 use crate::error::{DagcalError, EvalError, PersistenceError};
 use crate::function::FunctionSignature;
 use crate::id::ExpressionId;
@@ -27,7 +27,10 @@ use crate::parser::{parse_expression, parse_statement};
 use crate::persistence::{ENGINE_SNAPSHOT_VERSION, EngineSnapshot, PersistedEntry};
 use std::collections::{BTreeSet, HashSet};
 
-pub use self::entry::{EntryRemoval, EntryState, EntryView, Execution};
+pub use self::entry::{
+    CompletionItem, CompletionKind, EntryRemoval, EntryState, EntryView, Execution,
+    ExpressionPreview, PreviewState, SetEntryResult,
+};
 
 /// Dependency-cycle information for the current engine state.
 ///
@@ -139,6 +142,29 @@ impl Session {
         self.entries
             .id_at_index(index)
             .and_then(|id| self.entry_view(id))
+    }
+
+    fn completion_items(&self) -> Vec<CompletionItem> {
+        let mut items = Vec::new();
+
+        for (name, id) in self.entries.named_entries() {
+            items.push(CompletionItem::entry(name, id));
+        }
+
+        for id in self.entries.sorted_ids() {
+            let name = self.entries.name_for_id(id).map(String::as_str);
+            items.push(CompletionItem::result(id, name));
+        }
+
+        for name in self.runtime.constant_names() {
+            items.push(CompletionItem::constant(name));
+        }
+
+        for (name, signature) in self.runtime.functions().signatures() {
+            items.push(CompletionItem::function(name, signature));
+        }
+
+        items
     }
 }
 
@@ -375,20 +401,21 @@ impl Engine {
     /// The saved entry is recomputed along with its transitive dependents.
     ///
     /// Unlike [`Engine::execute`], this method has an explicit target, so parse
-    /// errors are stored on that target. The method returns `Ok` only when the
-    /// saved target's final state is [`EntryState::Value`]. It returns `Err`
-    /// when the target was saved as [`EntryState::Error`], but the errored entry
-    /// remains in the engine for later inspection or repair.
+    /// errors are stored on that target. The method returns `Err` only when the
+    /// target itself is invalid and no entry can be saved. Saved parse,
+    /// resolution, or evaluation errors are returned in
+    /// [`SetEntryResult::target_error`] and remain in the engine for later
+    /// inspection or repair.
     pub fn set_entry<T>(
         &mut self,
         target: T,
         source: impl Into<String>,
-    ) -> Result<Execution, DagcalError>
+    ) -> Result<SetEntryResult, DagcalError>
     where
         T: IntoEntryTarget,
     {
         let (id, name) = self.resolve_or_create_target(target.into_entry_target()?);
-        self.set_entry_for_id(id, name, source)
+        Ok(self.set_entry_for_id(id, name, source))
     }
 
     /// Sets or edits an entry by stable expression ID.
@@ -396,7 +423,7 @@ impl Engine {
         &mut self,
         id: ExpressionId,
         source: impl Into<String>,
-    ) -> Result<Execution, DagcalError> {
+    ) -> SetEntryResult {
         let name = self.session.entries.name_for_id(id).cloned();
         self.session.entries.reserve_id(id);
         self.set_entry_for_id(id, name, source)
@@ -407,16 +434,21 @@ impl Engine {
         id: ExpressionId,
         name: Option<String>,
         source: impl Into<String>,
-    ) -> Result<Execution, DagcalError> {
+    ) -> SetEntryResult {
         let source = source.into();
         let execution = match parse_expression(&source) {
             Ok(ast) => self.save_parsed_entry(id, name, source, ast),
             Err(err) => self.save_parse_error(id, name, source, err),
         };
 
-        match &execution.state {
-            EntryState::Value(_) => Ok(execution),
-            EntryState::Error(err) => Err(err.clone()),
+        let target_error = match &execution.state {
+            EntryState::Value(_) => None,
+            EntryState::Error(err) => Some(err.clone()),
+        };
+
+        SetEntryResult {
+            execution,
+            target_error,
         }
     }
 
@@ -522,6 +554,38 @@ impl Engine {
     /// recomputed after editing it.
     pub fn affected_by(&self, id: ExpressionId) -> BTreeSet<ExpressionId> {
         self.session.affected_by(id)
+    }
+
+    /// Parses and resolves a source expression without storing or evaluating it.
+    pub fn preview_expression(&self, source: &str) -> ExpressionPreview {
+        let source = source.to_string();
+        match parse_expression(&source) {
+            Ok(ast) => match self.session.resolve_expr(ast) {
+                Ok(ast) => {
+                    let analysis = ast.analyze();
+                    preview_from_analysis(source, PreviewState::Valid, analysis)
+                }
+                Err(err) => ExpressionPreview {
+                    source,
+                    state: PreviewState::Error(DagcalError::Eval(err)),
+                    entry_references: BTreeSet::new(),
+                    constant_references: BTreeSet::new(),
+                    function_references: BTreeSet::new(),
+                },
+            },
+            Err(err) => ExpressionPreview {
+                source,
+                state: PreviewState::Error(err),
+                entry_references: BTreeSet::new(),
+                constant_references: BTreeSet::new(),
+                function_references: BTreeSet::new(),
+            },
+        }
+    }
+
+    /// Returns completion candidates for entries, result IDs, constants, and functions.
+    pub fn completion_items(&self) -> Vec<CompletionItem> {
+        self.session.completion_items()
     }
 
     /// Returns the current dependency-cycle report using expression IDs.
@@ -646,6 +710,20 @@ fn definition_source(input: &str, name: &str) -> String {
     }
 }
 
+fn preview_from_analysis(
+    source: String,
+    state: PreviewState,
+    analysis: ExpressionAnalysis,
+) -> ExpressionPreview {
+    ExpressionPreview {
+        source,
+        state,
+        entry_references: analysis.entry_references,
+        constant_references: analysis.constant_references,
+        function_references: analysis.function_references,
+    }
+}
+
 fn validate_snapshot(snapshot: EngineSnapshot) -> Result<Vec<PersistedEntry>, DagcalError> {
     if snapshot.version != ENGINE_SNAPSHOT_VERSION {
         return Err(DagcalError::Persistence(
@@ -709,7 +787,11 @@ mod tests {
             let execution = engine.execute(&format!("{target} = 0"));
             execution.id
         };
-        Engine::set_entry(engine, id, source)
+        let result = Engine::set_entry(engine, id, source)?;
+        match result.target_error {
+            Some(err) => Err(err),
+            None => Ok(result.execution),
+        }
     }
 
     fn remove_entry(engine: &mut Engine, target: &str) -> Option<EntryRemoval> {

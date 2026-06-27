@@ -202,6 +202,16 @@ impl FunctionRegistry {
     pub fn get(&self, name: &str) -> Option<&Function> {
         self.functions.get(name)
     }
+
+    pub fn signatures(&self) -> Vec<(String, FunctionSignature)> {
+        let mut signatures = self
+            .functions
+            .iter()
+            .map(|(name, function)| (name.clone(), function.signature().clone()))
+            .collect::<Vec<_>>();
+        signatures.sort_by(|left, right| left.0.cmp(&right.0));
+        signatures
+    }
 }
 
 fn finite_function_result(name: &str, value: Number) -> Result<Number, EvalError> {

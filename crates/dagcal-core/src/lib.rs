@@ -84,8 +84,9 @@ mod parser;
 mod persistence;
 
 pub use engine::{
-    CycleDiagnostics, Engine, EntryRemoval, EntryState, EntryTarget, EntryView, Execution,
-    IntoEntryTarget,
+    CompletionItem, CompletionKind, CycleDiagnostics, Engine, EntryRemoval, EntryState,
+    EntryTarget, EntryView, Execution, ExpressionPreview, IntoEntryTarget, PreviewState,
+    SetEntryResult,
 };
 pub use error::{
     DagcalError, EvalError, ParseError, ParseErrorKind, PersistenceError, ReferenceTarget,

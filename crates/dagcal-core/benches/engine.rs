@@ -87,7 +87,12 @@ fn bench_recompute_linear_dependents(c: &mut Criterion) {
                 engine
             },
             |mut engine| {
-                engine.set_entry_by_id(id(1), black_box("2")).unwrap();
+                assert!(
+                    engine
+                        .set_entry_by_id(id(1), black_box("2"))
+                        .target_error
+                        .is_none()
+                );
                 assert_value(&engine, id(100), 101.0);
                 black_box(engine);
             },
@@ -105,7 +110,12 @@ fn bench_recompute_branching_graph(c: &mut Criterion) {
                 engine
             },
             |mut engine| {
-                engine.set_entry_by_id(id(1), black_box("2")).unwrap();
+                assert!(
+                    engine
+                        .set_entry_by_id(id(1), black_box("2"))
+                        .target_error
+                        .is_none()
+                );
                 assert_value(&engine, id(102), 5150.0);
                 black_box(engine);
             },

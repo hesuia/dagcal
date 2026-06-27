@@ -119,4 +119,14 @@ impl EntryRepository {
     pub(super) fn id_at_index(&self, index: usize) -> Option<ExpressionId> {
         self.sorted_ids().into_iter().nth(index)
     }
+
+    pub(super) fn named_entries(&self) -> Vec<(String, ExpressionId)> {
+        let mut names = self
+            .names
+            .iter()
+            .map(|(name, id)| (name.clone(), *id))
+            .collect::<Vec<_>>();
+        names.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        names
+    }
 }

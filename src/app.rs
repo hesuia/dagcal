@@ -169,11 +169,8 @@ impl App {
             return;
         }
 
-        let affected_ids = self.engine.affected_by(id);
-        match self.engine.set_entry_by_id(id, source) {
-            Ok(execution) => self.refresh_affected(&execution.affected_ids),
-            Err(_) => self.refresh_affected(&affected_ids),
-        }
+        let result = self.engine.set_entry_by_id(id, source);
+        self.refresh_affected(&result.execution.affected_ids);
         self.select_id(id);
         if let Some(entry) = self.engine.entry_by_id(id) {
             self.status = format!("{id} = {}", state_summary(&entry.state));

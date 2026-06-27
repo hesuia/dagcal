@@ -1,4 +1,5 @@
 use crate::error::DagcalError;
+use crate::function::FunctionSignature;
 use crate::id::ExpressionId;
 use crate::number::Number;
 use std::collections::BTreeSet;
@@ -60,4 +61,98 @@ pub struct EntryRemoval {
     /// This includes the removed ID and any transitive dependents that were
     /// affected by the removed entry.
     pub affected_ids: BTreeSet<ExpressionId>,
+}
+
+/// Result returned after explicitly setting an entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetEntryResult {
+    /// Saved entry execution report.
+    pub execution: Execution,
+    /// Target error when the saved entry's final state is an error.
+    ///
+    /// `None` means the target evaluated to a value. `Some` means the source
+    /// was still saved and can be inspected or edited later.
+    pub target_error: Option<DagcalError>,
+}
+
+/// Non-mutating parse/resolve analysis for source input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExpressionPreview {
+    /// Source text that was analyzed.
+    pub source: String,
+    /// Parse/resolve status for the source.
+    pub state: PreviewState,
+    /// Stored entries referenced by the source after name resolution.
+    pub entry_references: BTreeSet<ExpressionId>,
+    /// Runtime constants referenced by the source.
+    pub constant_references: BTreeSet<String>,
+    /// Functions called by the source.
+    pub function_references: BTreeSet<String>,
+}
+
+/// Parse/resolve status for an [`ExpressionPreview`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum PreviewState {
+    /// The source parsed and resolved successfully.
+    Valid,
+    /// The source could not be parsed or resolved.
+    Error(DagcalError),
+}
+
+/// Completion candidate category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionKind {
+    /// Named stored entry.
+    Entry,
+    /// `$n` result reference.
+    Result,
+    /// Runtime constant.
+    Constant,
+    /// Registered function.
+    Function,
+}
+
+/// Completion candidate for frontends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionItem {
+    /// Text inserted or matched by the UI.
+    pub label: String,
+    /// Candidate category.
+    pub kind: CompletionKind,
+    /// Optional display detail such as an ID or function signature.
+    pub detail: Option<String>,
+}
+
+impl CompletionItem {
+    pub(crate) fn entry(label: String, id: ExpressionId) -> Self {
+        Self {
+            label,
+            kind: CompletionKind::Entry,
+            detail: Some(id.to_string()),
+        }
+    }
+
+    pub(crate) fn result(id: ExpressionId, name: Option<&str>) -> Self {
+        Self {
+            label: id.to_string(),
+            kind: CompletionKind::Result,
+            detail: name.map(str::to_string),
+        }
+    }
+
+    pub(crate) fn constant(label: String) -> Self {
+        Self {
+            label,
+            kind: CompletionKind::Constant,
+            detail: None,
+        }
+    }
+
+    pub(crate) fn function(label: String, signature: FunctionSignature) -> Self {
+        Self {
+            label,
+            kind: CompletionKind::Function,
+            detail: Some(signature.to_string()),
+        }
+    }
 }

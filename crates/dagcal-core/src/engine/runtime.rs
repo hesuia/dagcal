@@ -33,6 +33,12 @@ impl RuntimeEnvironment {
         self.constants.get(name).cloned()
     }
 
+    pub(super) fn constant_names(&self) -> Vec<String> {
+        let mut names = self.constants.keys().cloned().collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
     pub(super) fn functions(&self) -> &FunctionRegistry {
         &self.functions
     }
