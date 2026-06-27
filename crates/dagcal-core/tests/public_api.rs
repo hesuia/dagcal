@@ -355,6 +355,109 @@ fn public_api_exposes_entries_for_frontend_state_rendering() {
 }
 
 #[test]
+fn public_api_reports_changed_entries_for_frontend_updates() {
+    let mut engine = Engine::new();
+
+    let subtotal = engine.execute("subtotal = 120");
+    let tax = engine.execute("tax = subtotal * 0.1");
+    let total = engine.execute("subtotal + tax");
+    let unrelated = engine.execute("5");
+
+    assert_eq!(subtotal.affected_ids, [id(1)].into_iter().collect());
+    assert_eq!(total.affected_ids, [id(3)].into_iter().collect());
+
+    let updated = engine.set_entry("subtotal", "200").unwrap();
+    assert_eq!(updated.id, subtotal.id);
+    assert_eq!(
+        updated.affected_ids,
+        [subtotal.id, tax.id, total.id].into_iter().collect()
+    );
+    assert_value(&engine, tax.id, 20.0);
+    assert_value(&engine, total.id, 220.0);
+    assert_value(&engine, unrelated.id, 5.0);
+
+    let broken = engine.execute("1 +");
+    assert_eq!(broken.affected_ids, [id(5)].into_iter().collect());
+    assert!(matches!(
+        broken.state,
+        EntryState::Error(DagcalError::Parse(_))
+    ));
+}
+
+#[test]
+fn public_api_reports_removed_entry_and_recomputed_dependents() {
+    let mut engine = Engine::new();
+
+    let subtotal = engine.execute("subtotal = 100");
+    let tax = engine.execute("subtotal * 0.1");
+    let total = engine.execute("subtotal + $2");
+
+    let removal = engine.remove_entry(subtotal.id).unwrap();
+
+    assert_eq!(removal.removed_entry.id, subtotal.id);
+    assert_eq!(removal.removed_entry.source, "100");
+    assert_eq!(
+        removal.affected_ids,
+        [subtotal.id, tax.id, total.id].into_iter().collect()
+    );
+    assert!(engine.entry(subtotal.id).is_none());
+    assert_eval_error(
+        &engine,
+        tax.id,
+        |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Id(target)) if *target == subtotal.id),
+    );
+    assert_eval_error(
+        &engine,
+        total.id,
+        |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Id(target)) if *target == subtotal.id),
+    );
+}
+
+#[test]
+fn public_api_exposes_sorted_entry_accessors_without_full_listing() {
+    let mut engine = Engine::new();
+
+    let first = engine.execute("10");
+    let second = engine.execute("20");
+    let third = engine.execute("30");
+    engine.remove_entry(second.id);
+
+    assert_eq!(engine.entry_count(), 2);
+    assert_eq!(engine.entry_ids(), vec![first.id, third.id]);
+    assert_eq!(engine.entry_at_index(0).unwrap().id, first.id);
+    assert_eq!(engine.entry_at_index(1).unwrap().id, third.id);
+    assert!(engine.entry_at_index(2).is_none());
+}
+
+#[test]
+fn public_api_exposes_dependency_queries_by_expression_id() {
+    let mut engine = Engine::new();
+
+    let subtotal = engine.execute("subtotal = 100");
+    let tax = engine.execute("tax = subtotal * 0.1");
+    let discount = engine.execute("discount = subtotal * 0.05");
+    let total = engine.execute("subtotal + tax - discount");
+    let unrelated = engine.execute("1");
+
+    assert_eq!(
+        engine.dependencies_of(total.id),
+        [subtotal.id, tax.id, discount.id].into_iter().collect()
+    );
+    assert_eq!(
+        engine.dependents_of(subtotal.id),
+        [tax.id, discount.id, total.id].into_iter().collect()
+    );
+    assert_eq!(
+        engine.affected_by(subtotal.id),
+        [subtotal.id, tax.id, discount.id, total.id]
+            .into_iter()
+            .collect()
+    );
+    assert!(engine.dependencies_of(unrelated.id).is_empty());
+    assert!(engine.dependents_of(unrelated.id).is_empty());
+}
+
+#[test]
 fn public_api_keeps_numbered_results_stable_across_removal_and_append() {
     let mut engine = Engine::new();
 

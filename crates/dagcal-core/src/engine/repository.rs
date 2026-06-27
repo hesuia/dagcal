@@ -105,4 +105,18 @@ impl EntryRepository {
     pub(super) fn ids(&self) -> impl Iterator<Item = ExpressionId> + '_ {
         self.records.keys().copied()
     }
+
+    pub(super) fn sorted_ids(&self) -> Vec<ExpressionId> {
+        let mut ids = self.ids().collect::<Vec<_>>();
+        ids.sort();
+        ids
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    pub(super) fn id_at_index(&self, index: usize) -> Option<ExpressionId> {
+        self.sorted_ids().into_iter().nth(index)
+    }
 }

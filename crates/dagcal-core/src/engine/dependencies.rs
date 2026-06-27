@@ -25,6 +25,14 @@ impl DependencyIndex {
         self.graph.affected_by(id)
     }
 
+    pub(super) fn dependencies_of(&self, id: ExpressionId) -> BTreeSet<ExpressionId> {
+        self.graph.dependencies_of(id)
+    }
+
+    pub(super) fn dependents_of(&self, id: ExpressionId) -> BTreeSet<ExpressionId> {
+        self.graph.dependents_of(id)
+    }
+
     pub(super) fn affected_by_any(
         &self,
         ids: impl IntoIterator<Item = ExpressionId>,

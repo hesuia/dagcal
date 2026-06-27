@@ -66,6 +66,25 @@ impl ReferenceGraph {
         affected
     }
 
+    pub(crate) fn dependencies_of(&self, id: ExpressionId) -> BTreeSet<ExpressionId> {
+        let Some(&node) = self.node_indices.get(&id) else {
+            return BTreeSet::new();
+        };
+
+        self.graph
+            .edges_directed(node, Direction::Incoming)
+            .map(|edge| self.graph[edge.source()])
+            .collect()
+    }
+
+    pub(crate) fn dependents_of(&self, id: ExpressionId) -> BTreeSet<ExpressionId> {
+        let Some(&node) = self.node_indices.get(&id) else {
+            return BTreeSet::new();
+        };
+
+        self.dependents_from([node])
+    }
+
     pub(crate) fn cycle_report(&self) -> CycleReport {
         let components = kosaraju_scc(&self.graph);
         self.cycle_report_from_components(&components)

@@ -27,7 +27,7 @@ use crate::parser::{parse_expression, parse_statement};
 use crate::persistence::{ENGINE_SNAPSHOT_VERSION, EngineSnapshot, PersistedEntry};
 use std::collections::{BTreeSet, HashSet};
 
-pub use self::entry::{EntryState, EntryView, Execution};
+pub use self::entry::{EntryRemoval, EntryState, EntryView, Execution};
 
 /// Dependency-cycle information for the current engine state.
 ///
@@ -79,6 +79,14 @@ impl Session {
         RecomputePlanner::new(&self.dependencies).affected_by(id)
     }
 
+    fn dependencies_of(&self, id: ExpressionId) -> BTreeSet<ExpressionId> {
+        self.dependencies.dependencies_of(id)
+    }
+
+    fn dependents_of(&self, id: ExpressionId) -> BTreeSet<ExpressionId> {
+        self.dependencies.dependents_of(id)
+    }
+
     fn affected_by_any(
         &self,
         ids: impl IntoIterator<Item = ExpressionId>,
@@ -95,11 +103,6 @@ impl Session {
             ..
         } = self;
         EvaluationRunner::new(dependencies, compiled, runtime).recompute_ids(ids, results);
-    }
-
-    fn recompute_affected(&mut self, id: ExpressionId) {
-        let affected = self.affected_by(id);
-        self.recompute_ids(affected);
     }
 
     fn state(&self, id: ExpressionId) -> Option<&EntryState> {
@@ -122,6 +125,20 @@ impl Session {
             .into_iter()
             .filter_map(|record| self.entry_view(record.id))
             .collect()
+    }
+
+    fn entry_ids(&self) -> Vec<ExpressionId> {
+        self.entries.sorted_ids()
+    }
+
+    fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn entry_at_index(&self, index: usize) -> Option<EntryView> {
+        self.entries
+            .id_at_index(index)
+            .and_then(|id| self.entry_view(id))
     }
 }
 
@@ -405,12 +422,12 @@ impl Engine {
 
     /// Removes an entry by `$n` result reference, name, or stable ID.
     ///
-    /// Returns a snapshot view of the removed entry when the target existed.
+    /// Returns the removed entry and recomputation report when the target existed.
     /// Entries that depended on the removed ID are recomputed and typically
     /// become unknown-reference or dependency errors. Removing an entry does not
     /// renumber later `$n` results; future plain expressions continue from the
     /// highest allocated ID.
-    pub fn remove_entry<T>(&mut self, target: T) -> Option<EntryView>
+    pub fn remove_entry<T>(&mut self, target: T) -> Option<EntryRemoval>
     where
         T: IntoEntryTarget,
     {
@@ -419,15 +436,18 @@ impl Engine {
     }
 
     /// Removes an entry by stable expression ID.
-    pub fn remove_entry_by_id(&mut self, id: ExpressionId) -> Option<EntryView> {
-        let removed = self.session.entry_view(id)?;
+    pub fn remove_entry_by_id(&mut self, id: ExpressionId) -> Option<EntryRemoval> {
+        let removed_entry = self.session.entry_view(id)?;
         let affected = self.session.affected_by(id);
         self.session.entries.remove(id)?;
         self.session.compiled.remove(id);
         self.session.results.remove(id);
         self.session.rebuild_dependencies();
-        self.session.recompute_ids(affected);
-        Some(removed)
+        self.session.recompute_ids(affected.clone());
+        Some(EntryRemoval {
+            removed_entry,
+            affected_ids: affected,
+        })
     }
 
     /// Returns the current state for an entry by `$n`, name, or stable ID.
@@ -469,6 +489,37 @@ impl Engine {
     /// of the engine state at the time of the call.
     pub fn entries(&self) -> Vec<EntryView> {
         self.session.entries()
+    }
+
+    /// Returns all stored entry IDs sorted by stable ID.
+    pub fn entry_ids(&self) -> Vec<ExpressionId> {
+        self.session.entry_ids()
+    }
+
+    /// Returns the number of stored entries.
+    pub fn entry_count(&self) -> usize {
+        self.session.entry_count()
+    }
+
+    /// Returns a renderable view for the entry at a sorted display index.
+    pub fn entry_at_index(&self, index: usize) -> Option<EntryView> {
+        self.session.entry_at_index(index)
+    }
+
+    /// Returns the entries that the given entry directly depends on.
+    pub fn dependencies_of(&self, id: ExpressionId) -> BTreeSet<ExpressionId> {
+        self.session.dependencies_of(id)
+    }
+
+    /// Returns transitive dependents of the given entry.
+    pub fn dependents_of(&self, id: ExpressionId) -> BTreeSet<ExpressionId> {
+        self.session.dependents_of(id)
+    }
+
+    /// Returns the given entry plus all transitive dependents that would be
+    /// recomputed after editing it.
+    pub fn affected_by(&self, id: ExpressionId) -> BTreeSet<ExpressionId> {
+        self.session.affected_by(id)
     }
 
     /// Returns the current dependency-cycle report using expression IDs.
@@ -548,7 +599,8 @@ impl Engine {
             .upsert(EntryRecord::new(id, name, source));
         self.session.compiled.insert(id, compiled);
         self.session.rebuild_dependencies();
-        self.session.recompute_affected(id);
+        let affected_ids = self.session.affected_by(id);
+        self.session.recompute_ids(affected_ids.clone());
 
         Execution {
             id,
@@ -557,6 +609,7 @@ impl Engine {
                 .state(id)
                 .expect("saved entry should exist")
                 .clone(),
+            affected_ids,
         }
     }
 
@@ -657,7 +710,7 @@ mod tests {
         Engine::set_entry(engine, id, source)
     }
 
-    fn remove_entry(engine: &mut Engine, target: &str) -> Option<EntryView> {
+    fn remove_entry(engine: &mut Engine, target: &str) -> Option<EntryRemoval> {
         let id = label_id(engine, target)?;
         Engine::remove_entry(engine, id)
     }

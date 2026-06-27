@@ -1,4 +1,5 @@
 use dagcal_core::{Engine, EntryState, EntryView, ExpressionId};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -9,6 +10,7 @@ pub enum Mode {
 
 pub struct App {
     engine: Engine,
+    entries: Vec<EntryView>,
     selected: usize,
     mode: Mode,
     input: String,
@@ -26,6 +28,7 @@ impl App {
     pub fn new() -> Self {
         Self {
             engine: Engine::new(),
+            entries: Vec::new(),
             selected: 0,
             mode: Mode::Normal,
             input: String::new(),
@@ -35,7 +38,7 @@ impl App {
     }
 
     pub fn entries(&self) -> Vec<EntryView> {
-        self.engine.entries()
+        self.entries.clone()
     }
 
     pub fn selected(&self) -> usize {
@@ -63,7 +66,7 @@ impl App {
     }
 
     pub fn move_next(&mut self) {
-        let len = self.engine.entries().len();
+        let len = self.entries.len();
         if len > 0 {
             self.selected = (self.selected + 1).min(len - 1);
         }
@@ -121,13 +124,18 @@ impl App {
             return;
         };
 
-        self.engine.remove_entry_by_id(id);
+        if let Some(removal) = self.engine.remove_entry_by_id(id) {
+            self.entries
+                .retain(|entry| entry.id != removal.removed_entry.id);
+            self.refresh_affected(&removal.affected_ids);
+        }
         self.clamp_selection();
         self.status = format!("removed {id}");
     }
 
     pub fn clear(&mut self) {
         self.engine = Engine::new();
+        self.entries.clear();
         self.selected = 0;
         self.mode = Mode::Normal;
         self.input.clear();
@@ -142,6 +150,7 @@ impl App {
         }
 
         let execution = self.engine.execute(&source);
+        self.refresh_affected(&execution.affected_ids);
         self.select_id(execution.id);
         self.status = format!("{} = {}", execution.id, state_summary(&execution.state));
         self.finish_input();
@@ -160,7 +169,11 @@ impl App {
             return;
         }
 
-        let _ = self.engine.set_entry_by_id(id, source);
+        let affected_ids = self.engine.affected_by(id);
+        match self.engine.set_entry_by_id(id, source) {
+            Ok(execution) => self.refresh_affected(&execution.affected_ids),
+            Err(_) => self.refresh_affected(&affected_ids),
+        }
         self.select_id(id);
         if let Some(entry) = self.engine.entry_by_id(id) {
             self.status = format!("{id} = {}", state_summary(&entry.state));
@@ -174,7 +187,7 @@ impl App {
     }
 
     fn selected_entry(&self) -> Option<EntryView> {
-        self.engine.entries().into_iter().nth(self.selected)
+        self.entries.get(self.selected).cloned()
     }
 
     fn selected_id(&self) -> Option<ExpressionId> {
@@ -182,23 +195,43 @@ impl App {
     }
 
     fn select_id(&mut self, id: ExpressionId) {
-        if let Some(index) = self
-            .engine
-            .entries()
-            .iter()
-            .position(|entry| entry.id == id)
-        {
+        if let Some(index) = self.entries.iter().position(|entry| entry.id == id) {
             self.selected = index;
         }
     }
 
     fn clamp_selection(&mut self) {
-        let len = self.engine.entries().len();
+        let len = self.entries.len();
         if len == 0 {
             self.selected = 0;
         } else {
             self.selected = self.selected.min(len - 1);
         }
+    }
+
+    fn refresh_affected(&mut self, ids: &BTreeSet<ExpressionId>) {
+        for id in ids {
+            match self.engine.entry_by_id(*id) {
+                Some(entry) => self.upsert_cached_entry(entry),
+                None => self.entries.retain(|entry| entry.id != *id),
+            }
+        }
+    }
+
+    fn upsert_cached_entry(&mut self, entry: EntryView) {
+        match self
+            .entries
+            .binary_search_by_key(&entry.id, |entry| entry.id)
+        {
+            Ok(index) => self.entries[index] = entry,
+            Err(index) => self.entries.insert(index, entry),
+        }
+    }
+
+    #[cfg(test)]
+    fn refresh_cache(&mut self) {
+        self.entries = self.engine.entries();
+        self.clamp_selection();
     }
 }
 
@@ -244,6 +277,7 @@ mod tests {
         let mut app = App::new();
         app.engine.execute("subtotal = 100");
         app.engine.execute("subtotal * 2");
+        app.refresh_cache();
 
         app.move_previous();
         app.start_edit();
@@ -263,6 +297,7 @@ mod tests {
     fn edit_keeps_invalid_source_as_error_entry() {
         let mut app = App::new();
         app.engine.execute("10");
+        app.refresh_cache();
 
         app.start_edit();
         app.input.clear();
@@ -300,6 +335,7 @@ mod tests {
         let mut app = App::new();
         app.engine.execute("10");
         app.engine.execute("20");
+        app.refresh_cache();
         app.delete_selected();
 
         let entries = app.entries();

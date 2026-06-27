@@ -1,12 +1,13 @@
 use crate::error::DagcalError;
 use crate::id::ExpressionId;
 use crate::number::Number;
+use std::collections::BTreeSet;
 
 /// Owned snapshot of one stored engine entry.
 ///
 /// `EntryView` is returned by query methods such as
 /// [`Engine::entry`](crate::Engine::entry), [`Engine::entries`](crate::Engine::entries),
-/// and [`Engine::remove_entry`](crate::Engine::remove_entry). It contains
+/// and [`EntryRemoval::removed_entry`]. It contains
 /// cloned data so callers can keep it after mutating the engine.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EntryView {
@@ -42,4 +43,21 @@ pub struct Execution {
     pub id: ExpressionId,
     /// Final state of the execution target.
     pub state: EntryState,
+    /// Entries recomputed while saving this entry.
+    ///
+    /// The target ID is always included. Transitive dependents are included
+    /// when they were affected by the saved source.
+    pub affected_ids: BTreeSet<ExpressionId>,
+}
+
+/// Result returned after removing an entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntryRemoval {
+    /// Snapshot of the entry before it was removed.
+    pub removed_entry: EntryView,
+    /// Entries recomputed after the removal.
+    ///
+    /// This includes the removed ID and any transitive dependents that were
+    /// affected by the removed entry.
+    pub affected_ids: BTreeSet<ExpressionId>,
 }
