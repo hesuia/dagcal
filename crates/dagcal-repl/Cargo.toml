@@ -1,0 +1,7 @@
+[package]
+name = "dagcal-repl"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dagcal-core = { path = "../dagcal-core" }

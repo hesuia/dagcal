@@ -1,3 +1,5 @@
+mod app;
+
 use crate::app::{App, Mode, state_summary};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
