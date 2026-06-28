@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 pub enum Message {
     InputChanged(String),
     Submit,
+    NewEntry,
     Edit(ExpressionId),
     CancelEdit,
     Delete(ExpressionId),
@@ -24,6 +25,7 @@ pub struct GuiApp {
     pub(crate) entries: Vec<EntryView>,
     pub(crate) input: Draft,
     pub(crate) editing: Option<ExpressionId>,
+    pub(crate) draft_entry: Option<ExpressionId>,
     pub(crate) selected: Option<ExpressionId>,
     pub(crate) status: String,
 }
@@ -36,6 +38,7 @@ impl GuiApp {
                 entries: Vec::new(),
                 input: Draft::default(),
                 editing: None,
+                draft_entry: None,
                 selected: None,
                 status: "Ready".to_string(),
             },
@@ -47,8 +50,10 @@ impl GuiApp {
         match message {
             Message::InputChanged(value) => {
                 self.input.set(value);
+                self.sync_new_entry_draft();
             }
             Message::Submit => self.submit_input(),
+            Message::NewEntry => self.start_new_entry(),
             Message::Edit(id) => self.start_edit(id),
             Message::CancelEdit => self.cancel_edit(),
             Message::Delete(id) => self.delete_entry(id),
@@ -71,10 +76,6 @@ impl GuiApp {
 
     fn submit_input(&mut self) {
         let source = self.input.source().trim().to_string();
-        if source.is_empty() {
-            self.status = "Input is empty".to_string();
-            return;
-        }
 
         if let Some(id) = self.editing {
             let source = self.edit_source_for_save(id, source);
@@ -85,6 +86,8 @@ impl GuiApp {
                 None => format!("{id} updated"),
             };
             self.load_selected_entry(id, SelectionStatus::Keep);
+        } else if let Some(id) = self.draft_entry.take() {
+            self.save_new_entry_draft(id, source);
         } else {
             let execution = self.engine.execute(&source);
             self.refresh_affected(&execution.affected_ids);
@@ -99,9 +102,17 @@ impl GuiApp {
         self.load_selected_entry(id, SelectionStatus::Set(format!("Editing {id}")));
     }
 
+    fn start_new_entry(&mut self) {
+        self.editing = None;
+        self.draft_entry = None;
+        self.input.clear();
+        self.sync_new_entry_draft();
+    }
+
     fn load_selected_entry(&mut self, id: ExpressionId, status: SelectionStatus) -> bool {
         match self.engine.entry_by_id(id) {
             Some(entry) => {
+                self.draft_entry = None;
                 self.input.load_selection(entry_expression_source(&entry));
                 self.editing = Some(id);
                 self.selected = Some(id);
@@ -130,6 +141,9 @@ impl GuiApp {
             self.entries
                 .retain(|entry| entry.id != removal.removed_entry.id);
             let was_editing = self.editing == Some(id);
+            if self.draft_entry == Some(id) {
+                self.draft_entry = None;
+            }
             self.refresh_affected(&removal.affected_ids);
             if self.selected == Some(id) {
                 self.selected = self.entries.last().map(|entry| entry.id);
@@ -159,7 +173,11 @@ impl GuiApp {
             .unwrap_or_else(|| id.to_string());
 
         self.input.insert_token(&token);
-        self.selected = Some(id);
+        if self.editing.is_none() {
+            self.sync_new_entry_draft();
+        } else {
+            self.selected = Some(id);
+        }
         self.status = format!("Inserted {token}");
     }
 
@@ -230,8 +248,57 @@ impl GuiApp {
         self.entries.clear();
         self.input.clear();
         self.editing = None;
+        self.draft_entry = None;
         self.selected = None;
         self.status = "Cleared".to_string();
+    }
+
+    fn sync_new_entry_draft(&mut self) {
+        if self.editing.is_some() {
+            return;
+        }
+
+        let source = self.input.source().trim().to_string();
+        let id = match self
+            .draft_entry
+            .filter(|id| self.engine.entry_by_id(*id).is_some())
+        {
+            Some(id) => id,
+            None => {
+                if let Some(id) = self.find_empty_entry_id() {
+                    self.draft_entry = Some(id);
+                    id
+                } else {
+                    let execution = self.engine.execute(&source);
+                    self.refresh_affected(&execution.affected_ids);
+                    self.draft_entry = Some(execution.id);
+                    self.selected = Some(execution.id);
+                    self.status = format!("{} = {}", execution.id, state_summary(&execution.state));
+                    return;
+                }
+            }
+        };
+
+        let result = self.engine.set_entry_by_id(id, source);
+        self.refresh_affected(&result.execution.affected_ids);
+        self.selected = Some(id);
+        self.status = format!("{id} = {}", state_summary(&result.execution.state));
+    }
+
+    fn find_empty_entry_id(&self) -> Option<ExpressionId> {
+        self.entries
+            .iter()
+            .find(|entry| entry.source.trim().is_empty())
+            .map(|entry| entry.id)
+    }
+
+    fn save_new_entry_draft(&mut self, id: ExpressionId, source: String) {
+        let result = self.engine.set_entry_by_id(id, source);
+        self.refresh_affected(&result.execution.affected_ids);
+        self.selected = Some(id);
+        self.status = format!("{id} = {}", state_summary(&result.execution.state));
+        self.editing = None;
+        self.input.clear();
     }
 
     fn refresh_affected(&mut self, ids: &BTreeSet<ExpressionId>) {
@@ -473,5 +540,84 @@ mod tests {
 
         assert_eq!(app.entries.len(), 1);
         assert_eq!(app.entries[0].id, ExpressionId::new(2));
+    }
+
+    #[test]
+    fn submitting_empty_new_expression_creates_history_entry() {
+        let (mut app, _) = GuiApp::new();
+
+        app.submit_input();
+
+        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.entries[0].id, ExpressionId::new(1));
+        assert_eq!(app.entries[0].source, "");
+        assert!(matches!(app.entries[0].state, EntryState::Error(_)));
+        assert_eq!(app.selected, Some(ExpressionId::new(1)));
+        assert_eq!(app.input.source(), "");
+    }
+
+    #[test]
+    fn new_expression_input_creates_and_updates_draft_history_entry() {
+        let (mut app, _) = GuiApp::new();
+
+        let _ = app.update(Message::InputChanged("1".to_string()));
+        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.entries[0].id, ExpressionId::new(1));
+        assert_eq!(app.entries[0].source, "1");
+        assert_eq!(app.entries[0].state, EntryState::Value(Number::from(1)));
+
+        let _ = app.update(Message::InputChanged("1 +".to_string()));
+        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.entries[0].id, ExpressionId::new(1));
+        assert_eq!(app.entries[0].source, "1 +");
+        assert!(matches!(app.entries[0].state, EntryState::Error(_)));
+    }
+
+    #[test]
+    fn new_entry_starts_empty_draft_after_existing_entry() {
+        let (mut app, _) = GuiApp::new();
+        app.input.set("10".to_string());
+        app.submit_input();
+
+        let _ = app.update(Message::NewEntry);
+
+        assert_eq!(app.entries.len(), 2);
+        assert_eq!(app.entries[1].id, ExpressionId::new(2));
+        assert_eq!(app.entries[1].source, "");
+        assert_eq!(app.draft_entry, Some(ExpressionId::new(2)));
+        assert_eq!(app.selected, Some(ExpressionId::new(2)));
+        assert_eq!(app.editing, None);
+        assert_eq!(app.input.source(), "");
+    }
+
+    #[test]
+    fn new_entry_from_editing_does_not_overwrite_selected_entry() {
+        let (mut app, _) = GuiApp::new();
+        app.input.set("10".to_string());
+        app.submit_input();
+        app.select_entry(ExpressionId::new(1));
+
+        let _ = app.update(Message::NewEntry);
+        let _ = app.update(Message::InputChanged("20".to_string()));
+
+        assert_eq!(app.entries.len(), 2);
+        assert_eq!(app.entries[0].id, ExpressionId::new(1));
+        assert_eq!(app.entries[0].source, "10");
+        assert_eq!(app.entries[1].id, ExpressionId::new(2));
+        assert_eq!(app.entries[1].source, "20");
+        assert_eq!(app.draft_entry, Some(ExpressionId::new(2)));
+    }
+
+    #[test]
+    fn new_entry_reuses_existing_empty_entry() {
+        let (mut app, _) = GuiApp::new();
+
+        app.submit_input();
+        let _ = app.update(Message::NewEntry);
+
+        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.entries[0].id, ExpressionId::new(1));
+        assert_eq!(app.draft_entry, Some(ExpressionId::new(1)));
+        assert_eq!(app.selected, Some(ExpressionId::new(1)));
     }
 }

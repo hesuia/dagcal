@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 dagcal-core = { path = "../dagcal-core" }
 iced = "0.14.0"
+iced_aw = "0.14.1"

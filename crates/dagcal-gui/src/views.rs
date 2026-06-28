@@ -4,8 +4,8 @@ use crate::formatting::{
     table_state_summary,
 };
 use crate::style::{
-    DETAIL_HEIGHT, TABLE_TEXT_SIZE, fixed_line, fixed_scroll_text, row_container_style,
-    warning_color,
+    DETAIL_HEIGHT, TABLE_TEXT_SIZE, context_menu_item_style, context_menu_panel_style, fixed_line,
+    fixed_scroll_text, row_container_style, warning_color,
 };
 use dagcal_core::{EntryState, EntryView, ExpressionId};
 use iced::widget::text::Wrapping;
@@ -13,6 +13,7 @@ use iced::widget::{
     button, column, container, mouse_area, rich_text, row, rule, scrollable, text, text_input,
 };
 use iced::{Element, Fill, Length};
+use iced_aw::ContextMenu;
 
 impl GuiApp {
     pub(crate) fn view(&self) -> Element<'_, Message> {
@@ -126,9 +127,12 @@ impl GuiApp {
             .padding(10)
             .size(18);
 
-        let mut actions = row![button("Save").on_press(Message::Submit)]
-            .spacing(8)
-            .align_y(iced::Center);
+        let mut actions = row![
+            button("New").on_press(Message::NewEntry),
+            button("Save").on_press(Message::Submit)
+        ]
+        .spacing(8)
+        .align_y(iced::Center);
 
         if self.editing.is_some() {
             actions = actions.push(button("Cancel").on_press(Message::CancelEdit));
@@ -174,7 +178,7 @@ fn entry_header() -> Element<'static, Message> {
         text("ID").width(Length::Fixed(60.0)),
         text("Expression").width(Length::FillPortion(3)),
         text("Result").width(Length::FillPortion(2)),
-        text("Actions").width(Length::Fixed(220.0)),
+        text("Actions").width(Length::Fixed(150.0)),
     ]
     .spacing(8)
     .into()
@@ -185,7 +189,7 @@ fn entry_row<'a>(
     entries: &'a [EntryView],
     selected: bool,
 ) -> Element<'a, Message> {
-    mouse_area(
+    let row = mouse_area(
         container(
             row![
                 text(if selected {
@@ -199,10 +203,9 @@ fn entry_row<'a>(
                 row![
                     button("Use").on_press(Message::InsertReference(entry.id)),
                     button("Edit").on_press(Message::Edit(entry.id)),
-                    button("Delete").on_press(Message::Delete(entry.id)),
                 ]
                 .spacing(6)
-                .width(Length::Fixed(220.0)),
+                .width(Length::Fixed(150.0)),
             ]
             .spacing(8)
             .align_y(iced::Center),
@@ -211,8 +214,33 @@ fn entry_row<'a>(
         .width(Fill)
         .style(move |_| row_container_style(selected)),
     )
-    .on_press(Message::Select(entry.id))
+    .on_press(Message::Select(entry.id));
+
+    ContextMenu::new(row, move || entry_context_menu(entry.id)).into()
+}
+
+fn entry_context_menu(id: ExpressionId) -> Element<'static, Message> {
+    container(
+        column![
+            context_menu_item("Use", Message::InsertReference(id)),
+            context_menu_item("Edit", Message::Edit(id)),
+            context_menu_item("Delete", Message::Delete(id)),
+        ]
+        .spacing(3),
+    )
+    .padding(5)
+    .width(Length::Fixed(150.0))
+    .style(|_| context_menu_panel_style())
     .into()
+}
+
+fn context_menu_item(label: &'static str, message: Message) -> Element<'static, Message> {
+    button(text(label).width(Fill))
+        .width(Fill)
+        .padding([7, 10])
+        .style(|_, status| context_menu_item_style(status))
+        .on_press(message)
+        .into()
 }
 
 fn expression_view(entry: &EntryView, entries: &[EntryView]) -> Element<'static, Message> {
