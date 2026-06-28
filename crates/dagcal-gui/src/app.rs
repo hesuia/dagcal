@@ -80,32 +80,41 @@ impl GuiApp {
             let source = self.edit_source_for_save(id, source);
             let result = self.engine.set_entry_by_id(id, source);
             self.refresh_affected(&result.execution.affected_ids);
-            self.selected = Some(id);
             self.status = match self.engine.entry_by_id(id) {
                 Some(entry) => format!("{id} = {}", state_summary(&entry.state)),
                 None => format!("{id} updated"),
             };
+            self.load_selected_entry(id, SelectionStatus::Keep);
         } else {
             let execution = self.engine.execute(&source);
             self.refresh_affected(&execution.affected_ids);
             self.selected = Some(execution.id);
             self.status = format!("{} = {}", execution.id, state_summary(&execution.state));
+            self.editing = None;
+            self.input.clear();
         }
-
-        self.editing = None;
-        self.input.clear();
     }
 
     fn start_edit(&mut self, id: ExpressionId) {
+        self.load_selected_entry(id, SelectionStatus::Set(format!("Editing {id}")));
+    }
+
+    fn load_selected_entry(&mut self, id: ExpressionId, status: SelectionStatus) -> bool {
         match self.engine.entry_by_id(id) {
             Some(entry) => {
-                self.input.set(entry_expression_source(&entry));
+                self.input.load_selection(entry_expression_source(&entry));
                 self.editing = Some(id);
                 self.selected = Some(id);
-                self.status = format!("Editing {id}");
+                if let SelectionStatus::Set(status) = status {
+                    self.status = status;
+                }
+                true
             }
             None => {
-                self.status = format!("{id} is not available");
+                if !matches!(status, SelectionStatus::Keep) {
+                    self.status = format!("{id} is not available");
+                }
+                false
             }
         }
     }
@@ -120,11 +129,18 @@ impl GuiApp {
         if let Some(removal) = self.engine.remove_entry_by_id(id) {
             self.entries
                 .retain(|entry| entry.id != removal.removed_entry.id);
+            let was_editing = self.editing == Some(id);
             self.refresh_affected(&removal.affected_ids);
             if self.selected == Some(id) {
                 self.selected = self.entries.last().map(|entry| entry.id);
+                if let Some(id) = self.selected {
+                    self.load_selected_entry(id, SelectionStatus::Keep);
+                } else {
+                    self.editing = None;
+                    self.input.clear();
+                }
             }
-            if self.editing == Some(id) {
+            if was_editing && self.selected.is_none() {
                 self.editing = None;
                 self.input.clear();
             }
@@ -148,9 +164,7 @@ impl GuiApp {
     }
 
     fn select_entry(&mut self, id: ExpressionId) {
-        if self.entries.iter().any(|entry| entry.id == id) {
-            self.selected = Some(id);
-        } else {
+        if !self.load_selected_entry(id, SelectionStatus::Keep) {
             self.status = format!("{id} is not available");
         }
     }
@@ -188,11 +202,12 @@ impl GuiApp {
             },
         };
 
-        self.selected = Some(self.entries[next_index].id);
+        self.load_selected_entry(self.entries[next_index].id, SelectionStatus::Keep);
     }
 
     fn selection_navigation_enabled(&self) -> bool {
-        self.editing.is_none() && self.input.source().is_empty()
+        (self.editing.is_none() && self.input.source().is_empty())
+            || (self.editing.is_some() && self.input.is_loaded_selection())
     }
 
     fn edit_source_for_save(&self, id: ExpressionId, source: String) -> String {
@@ -245,9 +260,15 @@ enum SelectionDirection {
     Next,
 }
 
+enum SelectionStatus {
+    Keep,
+    Set(String),
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Draft {
     source: String,
+    loaded_selection: Option<String>,
 }
 
 impl Draft {
@@ -257,10 +278,23 @@ impl Draft {
 
     fn set(&mut self, source: String) {
         self.source = source;
+        self.loaded_selection = None;
+    }
+
+    fn load_selection(&mut self, source: String) {
+        self.loaded_selection = Some(source.clone());
+        self.source = source;
     }
 
     fn clear(&mut self) {
         self.source.clear();
+        self.loaded_selection = None;
+    }
+
+    fn is_loaded_selection(&self) -> bool {
+        self.loaded_selection
+            .as_deref()
+            .is_some_and(|source| source == self.source)
     }
 
     fn insert_token(&mut self, token: &str) {
@@ -269,6 +303,7 @@ impl Draft {
         }
         self.source.push_str(token);
         self.source.push(' ');
+        self.loaded_selection = None;
     }
 }
 
@@ -312,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn selecting_entry_does_not_replace_status_with_selected_message() {
+    fn selecting_entry_loads_source_without_replacing_status() {
         let (mut app, _) = GuiApp::new();
         app.input.set("21".to_string());
         app.submit_input();
@@ -321,6 +356,8 @@ mod tests {
         app.select_entry(ExpressionId::new(1));
 
         assert_eq!(app.selected, Some(ExpressionId::new(1)));
+        assert_eq!(app.editing, Some(ExpressionId::new(1)));
+        assert_eq!(app.input.source(), "21");
         assert_eq!(app.status, "Ready");
     }
 
@@ -332,13 +369,19 @@ mod tests {
         app.input.set("20".to_string());
         app.submit_input();
         app.selected = None;
+        app.editing = None;
+        app.input.clear();
 
         app.move_selection(SelectionDirection::Next);
         assert_eq!(app.selected, Some(ExpressionId::new(1)));
+        assert_eq!(app.input.source(), "10");
 
         app.selected = None;
+        app.editing = None;
+        app.input.clear();
         app.move_selection(SelectionDirection::Previous);
         assert_eq!(app.selected, Some(ExpressionId::new(2)));
+        assert_eq!(app.input.source(), "20");
     }
 
     #[test]
@@ -352,34 +395,34 @@ mod tests {
         app.selected = Some(ExpressionId::new(1));
         app.move_selection(SelectionDirection::Next);
         assert_eq!(app.selected, Some(ExpressionId::new(2)));
+        assert_eq!(app.input.source(), "20");
 
         app.move_selection(SelectionDirection::Next);
         assert_eq!(app.selected, Some(ExpressionId::new(2)));
+        assert_eq!(app.input.source(), "20");
 
         app.move_selection(SelectionDirection::Previous);
         assert_eq!(app.selected, Some(ExpressionId::new(1)));
+        assert_eq!(app.input.source(), "10");
 
         app.move_selection(SelectionDirection::Previous);
         assert_eq!(app.selected, Some(ExpressionId::new(1)));
+        assert_eq!(app.input.source(), "10");
     }
 
     #[test]
-    fn arrow_navigation_is_disabled_while_input_has_text_or_entry_is_editing() {
+    fn arrow_navigation_is_disabled_while_selected_input_is_modified() {
         let (mut app, _) = GuiApp::new();
         app.input.set("10".to_string());
         app.submit_input();
         app.input.set("20".to_string());
         app.submit_input();
 
-        app.selected = Some(ExpressionId::new(1));
+        app.select_entry(ExpressionId::new(1));
         app.input.set("draft".to_string());
         app.move_selection(SelectionDirection::Next);
         assert_eq!(app.selected, Some(ExpressionId::new(1)));
-
-        app.input.clear();
-        app.editing = Some(ExpressionId::new(1));
-        app.move_selection(SelectionDirection::Next);
-        assert_eq!(app.selected, Some(ExpressionId::new(1)));
+        assert_eq!(app.input.source(), "draft");
     }
 
     #[test]
@@ -399,6 +442,23 @@ mod tests {
         assert_eq!(app.entries[0].state, EntryState::Value(Number::from(20)));
         assert_eq!(app.entries[0].source, "20");
         assert_eq!(app.entries[1].state, EntryState::Value(Number::from(40)));
+    }
+
+    #[test]
+    fn submit_after_select_updates_existing_entry() {
+        let (mut app, _) = GuiApp::new();
+        app.input.set("10".to_string());
+        app.submit_input();
+
+        app.select_entry(ExpressionId::new(1));
+        app.input.set("30".to_string());
+        app.submit_input();
+
+        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.entries[0].state, EntryState::Value(Number::from(30)));
+        assert_eq!(app.selected, Some(ExpressionId::new(1)));
+        assert_eq!(app.editing, Some(ExpressionId::new(1)));
+        assert_eq!(app.input.source(), "30");
     }
 
     #[test]

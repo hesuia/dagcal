@@ -1,11 +1,13 @@
 use crate::app::{GuiApp, Message};
 use crate::formatting::{
-    entry_expression_source, entry_set_summary, expression_spans, resolved_source, state_summary,
+    entry_expression_source, entry_set_summary, expression_spans, resolved_source,
+    table_state_summary,
 };
 use crate::style::{
     DETAIL_HEIGHT, TABLE_TEXT_SIZE, fixed_line, fixed_scroll_text, row_container_style,
+    warning_color,
 };
-use dagcal_core::EntryView;
+use dagcal_core::{EntryState, EntryView, ExpressionId};
 use iced::widget::text::Wrapping;
 use iced::widget::{
     button, column, container, mouse_area, rich_text, row, rule, scrollable, text, text_input,
@@ -21,10 +23,9 @@ impl GuiApp {
             column![
                 header_view(),
                 entries,
-                self.dependency_view(),
                 rule::horizontal(1),
                 input,
-                fixed_scroll_text(&self.status, DETAIL_HEIGHT),
+                self.selected_detail_view(),
             ]
             .spacing(12)
             .padding(16),
@@ -56,30 +57,58 @@ impl GuiApp {
         scrollable(list).height(Length::FillPortion(3)).into()
     }
 
-    fn dependency_view(&self) -> Element<'_, Message> {
+    fn selected_detail_view(&self) -> Element<'_, Message> {
         let Some(id) = self.selected else {
-            return fixed_line(text("Dependencies: select an entry").size(14), 28.0);
+            return fixed_line(
+                text("Details: select an entry").size(14),
+                DETAIL_HEIGHT * 2.0,
+            );
         };
 
-        if !self.entries.iter().any(|entry| entry.id == id) {
+        let Some(entry) = self.entries.iter().find(|entry| entry.id == id) else {
             return fixed_line(
-                text("Dependencies: selected entry is not available").size(14),
-                28.0,
+                text("Details: selected entry is not available").size(14),
+                DETAIL_HEIGHT * 2.0,
             );
-        }
+        };
 
+        row![
+            container(fixed_scroll_text(
+                &self.selected_summary_text(id, entry),
+                DETAIL_HEIGHT * 2.0
+            ))
+            .width(Length::FillPortion(3)),
+            container(fixed_scroll_text(
+                &self.selected_error_text(entry),
+                DETAIL_HEIGHT * 2.0
+            ))
+            .width(Length::FillPortion(2)),
+        ]
+        .spacing(12)
+        .into()
+    }
+
+    fn selected_summary_text(&self, id: ExpressionId, entry: &EntryView) -> String {
         let dependencies = self.engine.dependencies_of(id);
         let dependents = self.engine.dependents_of(id);
+        let expression = entry_expression_source(entry);
+        let result = match &entry.state {
+            EntryState::Value(value) => format!("Result: {value}"),
+            EntryState::Error(_) => "Result: Error".to_string(),
+        };
 
-        fixed_line(
-            text(format!(
-                "{id} depends on: {}    used by: {}",
-                entry_set_summary(&dependencies, &self.entries),
-                entry_set_summary(&dependents, &self.entries)
-            ))
-            .size(14),
-            28.0,
+        format!(
+            "{id}  Expression: {expression}\n{result}\nDepends on: {}    Used by: {}",
+            entry_set_summary(&dependencies, &self.entries),
+            entry_set_summary(&dependents, &self.entries)
         )
+    }
+
+    fn selected_error_text(&self, entry: &EntryView) -> String {
+        match &entry.state {
+            EntryState::Value(_) => "Error detail: none".to_string(),
+            EntryState::Error(err) => format!("Error detail:\n{err}"),
+        }
     }
 
     fn input_view(&self) -> Element<'_, Message> {
@@ -197,8 +226,12 @@ fn expression_view(entry: &EntryView, entries: &[EntryView]) -> Element<'static,
 }
 
 fn result_view(state: &dagcal_core::EntryState) -> Element<'static, Message> {
-    text(state_summary(state))
-        .size(TABLE_TEXT_SIZE)
+    let mut result = text(table_state_summary(state)).size(TABLE_TEXT_SIZE);
+    if matches!(state, EntryState::Error(_)) {
+        result = result.color(warning_color());
+    }
+
+    result
         .width(Length::FillPortion(2))
         .wrapping(Wrapping::WordOrGlyph)
         .into()
@@ -207,6 +240,7 @@ fn result_view(state: &dagcal_core::EntryState) -> Element<'static, Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dagcal_core::ExpressionId;
 
     #[test]
     fn preview_summary_accepts_named_definitions() {
@@ -220,5 +254,30 @@ mod tests {
         let (app, _) = GuiApp::new();
 
         assert_eq!(app.preview_summary("1 + 2"), "Preview: 3");
+    }
+
+    #[test]
+    fn selected_error_text_includes_full_error() {
+        let (mut app, _) = GuiApp::new();
+        let _ = app.update(Message::InputChanged("1 / 0".to_string()));
+        let _ = app.update(Message::Submit);
+        let entry = app.entries[0].clone();
+
+        let detail = app.selected_error_text(&entry);
+
+        assert!(detail.contains("Error detail:"));
+        assert!(detail.len() > "Error".len());
+    }
+
+    #[test]
+    fn selected_summary_text_keeps_error_compact() {
+        let (mut app, _) = GuiApp::new();
+        let _ = app.update(Message::InputChanged("1 / 0".to_string()));
+        let _ = app.update(Message::Submit);
+        let entry = app.entries[0].clone();
+
+        let detail = app.selected_summary_text(ExpressionId::new(1), &entry);
+
+        assert!(detail.contains("Result: Error"));
     }
 }

@@ -10,6 +10,13 @@ pub(crate) fn state_summary(state: &EntryState) -> String {
     }
 }
 
+pub(crate) fn table_state_summary(state: &EntryState) -> String {
+    match state {
+        EntryState::Value(value) => value.to_string(),
+        EntryState::Error(_) => "Error".to_string(),
+    }
+}
+
 pub(crate) fn entry_expression_source(entry: &EntryView) -> String {
     match &entry.name {
         Some(name) => format!("{name} = {}", entry.source),
@@ -230,5 +237,14 @@ mod tests {
             entry_set_summary(&ids, &entries),
             "$1 = 21, $2 = error, $9 = missing"
         );
+    }
+
+    #[test]
+    fn table_state_summary_keeps_errors_compact() {
+        let mut engine = Engine::new();
+        engine.execute("1 / 0");
+        let entries = engine.entries();
+
+        assert_eq!(table_state_summary(&entries[0].state), "Error");
     }
 }
