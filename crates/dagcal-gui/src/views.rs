@@ -51,6 +51,7 @@ impl GuiApp {
                     entry,
                     &self.entries,
                     self.selected == Some(entry.id),
+                    self.draft_entry == Some(entry.id),
                 ));
             }
         }
@@ -93,10 +94,7 @@ impl GuiApp {
         let dependencies = self.engine.dependencies_of(id);
         let dependents = self.engine.dependents_of(id);
         let expression = entry_expression_source(entry);
-        let result = match &entry.state {
-            EntryState::Value(value) => format!("Result: {value}"),
-            EntryState::Error(_) => "Result: Error".to_string(),
-        };
+        let result = selected_result_summary(&entry.state, self.draft_entry == Some(id));
 
         format!(
             "{id}  Expression: {expression}\n{result}\nDepends on: {}    Used by: {}",
@@ -106,6 +104,10 @@ impl GuiApp {
     }
 
     fn selected_error_text(&self, entry: &EntryView) -> String {
+        if self.draft_entry == Some(entry.id) {
+            return "Error detail: none".to_string();
+        }
+
         match &entry.state {
             EntryState::Value(_) => "Error detail: none".to_string(),
             EntryState::Error(err) => format!("Error detail:\n{err}"),
@@ -188,6 +190,7 @@ fn entry_row<'a>(
     entry: &'a EntryView,
     entries: &'a [EntryView],
     selected: bool,
+    draft: bool,
 ) -> Element<'a, Message> {
     let row = mouse_area(
         container(
@@ -199,7 +202,7 @@ fn entry_row<'a>(
                 })
                 .width(Length::Fixed(60.0)),
                 expression_view(entry, entries),
-                result_view(&entry.state),
+                result_view(&entry.state, draft),
                 row![
                     button("Use").on_press(Message::InsertReference(entry.id)),
                     button("Edit").on_press(Message::Edit(entry.id)),
@@ -253,9 +256,9 @@ fn expression_view(entry: &EntryView, entries: &[EntryView]) -> Element<'static,
         .into()
 }
 
-fn result_view(state: &dagcal_core::EntryState) -> Element<'static, Message> {
-    let mut result = text(table_state_summary(state)).size(TABLE_TEXT_SIZE);
-    if matches!(state, EntryState::Error(_)) {
+fn result_view(state: &dagcal_core::EntryState, draft: bool) -> Element<'static, Message> {
+    let mut result = text(table_result_summary(state, draft)).size(TABLE_TEXT_SIZE);
+    if !draft && matches!(state, EntryState::Error(_)) {
         result = result.color(warning_color());
     }
 
@@ -263,6 +266,25 @@ fn result_view(state: &dagcal_core::EntryState) -> Element<'static, Message> {
         .width(Length::FillPortion(2))
         .wrapping(Wrapping::WordOrGlyph)
         .into()
+}
+
+fn table_result_summary(state: &EntryState, draft: bool) -> String {
+    if draft {
+        "None".to_string()
+    } else {
+        table_state_summary(state)
+    }
+}
+
+fn selected_result_summary(state: &EntryState, draft: bool) -> String {
+    if draft {
+        "Result: None".to_string()
+    } else {
+        match state {
+            EntryState::Value(value) => format!("Result: {value}"),
+            EntryState::Error(_) => "Result: Error".to_string(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -282,6 +304,20 @@ mod tests {
         let (app, _) = GuiApp::new();
 
         assert_eq!(app.preview_summary("1 + 2"), "Preview: 3");
+    }
+
+    #[test]
+    fn draft_entry_result_text_does_not_show_error() {
+        let (mut app, _) = GuiApp::new();
+        let _ = app.update(Message::InputChanged("1 + 2".to_string()));
+        let entry = app.entries[0].clone();
+
+        assert_eq!(table_result_summary(&entry.state, true), "None");
+        assert!(
+            app.selected_summary_text(entry.id, &entry)
+                .contains("Result: None")
+        );
+        assert_eq!(app.selected_error_text(&entry), "Error detail: none");
     }
 
     #[test]
