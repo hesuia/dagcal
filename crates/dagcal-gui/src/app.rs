@@ -78,9 +78,9 @@ impl GuiApp {
         let source = self.input.source().trim().to_string();
 
         if let Some(id) = self.editing {
-            let source = self.edit_source_for_save(id, source);
-            let result = self.engine.set_entry_by_id(id, source);
+            let result = self.engine.set_statement_by_id(id, source);
             self.refresh_affected(&result.execution.affected_ids);
+            let id = result.execution.id;
             self.status = match self.engine.entry_by_id(id) {
                 Some(entry) => format!("{id} = {}", state_summary(&entry.state)),
                 None => format!("{id} updated"),
@@ -197,8 +197,19 @@ impl GuiApp {
                 key: Key::Named(key::Named::ArrowDown),
                 ..
             } => self.move_selection(SelectionDirection::Next),
+            keyboard::Event::KeyPressed {
+                key: Key::Named(key::Named::Delete),
+                ..
+            } => self.delete_selected_entry(),
             _ => {}
         }
+    }
+
+    fn delete_selected_entry(&mut self) {
+        let Some(id) = self.selected else {
+            return;
+        };
+        self.delete_entry(id);
     }
 
     fn move_selection(&mut self, direction: SelectionDirection) {
@@ -226,21 +237,6 @@ impl GuiApp {
     fn selection_navigation_enabled(&self) -> bool {
         (self.editing.is_none() && self.input.source().is_empty())
             || (self.editing.is_some() && self.input.is_loaded_selection())
-    }
-
-    fn edit_source_for_save(&self, id: ExpressionId, source: String) -> String {
-        let Some(entry) = self.entries.iter().find(|entry| entry.id == id) else {
-            return source;
-        };
-
-        let Some(name) = entry.name.as_deref() else {
-            return source;
-        };
-
-        match source.split_once('=') {
-            Some((left, right)) if left.trim() == name => right.trim().to_string(),
-            _ => source,
-        }
     }
 
     fn clear(&mut self) {
@@ -279,8 +275,10 @@ impl GuiApp {
             }
         };
 
-        let result = self.engine.set_entry_by_id(id, source);
+        let result = self.engine.set_statement_by_id(id, source);
         self.refresh_affected(&result.execution.affected_ids);
+        self.remove_redirected_draft(id, result.execution.id);
+        let id = result.execution.id;
         self.selected = Some(id);
         self.status = format!("{id} = {}", state_summary(&result.execution.state));
     }
@@ -293,12 +291,30 @@ impl GuiApp {
     }
 
     fn save_new_entry_draft(&mut self, id: ExpressionId, source: String) {
-        let result = self.engine.set_entry_by_id(id, source);
+        let result = self.engine.set_statement_by_id(id, source);
         self.refresh_affected(&result.execution.affected_ids);
+        self.remove_redirected_draft(id, result.execution.id);
+        let id = result.execution.id;
         self.selected = Some(id);
         self.status = format!("{id} = {}", state_summary(&result.execution.state));
         self.editing = None;
         self.input.clear();
+    }
+
+    fn remove_redirected_draft(&mut self, requested_id: ExpressionId, saved_id: ExpressionId) {
+        if requested_id == saved_id {
+            return;
+        }
+
+        if let Some(removal) = self.engine.remove_entry_by_id(requested_id) {
+            self.entries
+                .retain(|entry| entry.id != removal.removed_entry.id);
+            self.refresh_affected(&removal.affected_ids);
+        }
+
+        if self.draft_entry == Some(requested_id) {
+            self.draft_entry = Some(saved_id);
+        }
     }
 
     fn refresh_affected(&mut self, ids: &BTreeSet<ExpressionId>) {
@@ -543,6 +559,33 @@ mod tests {
     }
 
     #[test]
+    fn delete_key_removes_selected_entry() {
+        let (mut app, _) = GuiApp::new();
+        app.input.set("10".to_string());
+        app.submit_input();
+        app.input.set("20".to_string());
+        app.submit_input();
+        app.editing = None;
+        app.input.clear();
+        app.selected = Some(ExpressionId::new(1));
+
+        app.handle_keyboard_event(keyboard::Event::KeyPressed {
+            key: Key::Named(key::Named::Delete),
+            modified_key: Key::Named(key::Named::Delete),
+            physical_key: key::Physical::Code(key::Code::Delete),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::default(),
+            text: None,
+            repeat: false,
+        });
+
+        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.entries[0].id, ExpressionId::new(2));
+        assert_eq!(app.selected, Some(ExpressionId::new(2)));
+        assert_eq!(app.status, "Removed $1");
+    }
+
+    #[test]
     fn submitting_empty_new_expression_creates_history_entry() {
         let (mut app, _) = GuiApp::new();
 
@@ -571,6 +614,39 @@ mod tests {
         assert_eq!(app.entries[0].id, ExpressionId::new(1));
         assert_eq!(app.entries[0].source, "1 +");
         assert!(matches!(app.entries[0].state, EntryState::Error(_)));
+    }
+
+    #[test]
+    fn new_expression_input_saves_named_definition_as_draft_history_entry() {
+        let (mut app, _) = GuiApp::new();
+
+        let _ = app.update(Message::InputChanged("x=2".to_string()));
+
+        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.entries[0].id, ExpressionId::new(1));
+        assert_eq!(app.entries[0].name.as_deref(), Some("x"));
+        assert_eq!(app.entries[0].source, "2");
+        assert_eq!(app.entries[0].state, EntryState::Value(Number::from(2)));
+        assert_eq!(app.selected, Some(ExpressionId::new(1)));
+        assert_eq!(app.draft_entry, Some(ExpressionId::new(1)));
+    }
+
+    #[test]
+    fn selected_entry_can_be_saved_as_named_definition() {
+        let (mut app, _) = GuiApp::new();
+        app.input.set("10".to_string());
+        app.submit_input();
+
+        app.select_entry(ExpressionId::new(1));
+        app.input.set("x=2".to_string());
+        app.submit_input();
+
+        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.entries[0].id, ExpressionId::new(1));
+        assert_eq!(app.entries[0].name.as_deref(), Some("x"));
+        assert_eq!(app.entries[0].source, "2");
+        assert_eq!(app.entries[0].state, EntryState::Value(Number::from(2)));
+        assert_eq!(app.input.source(), "x = 2");
     }
 
     #[test]

@@ -429,6 +429,37 @@ impl Engine {
         self.set_entry_for_id(id, name, source)
     }
 
+    /// Sets or edits an entry by stable expression ID using statement syntax.
+    ///
+    /// Plain expressions are saved on `id`. Named definitions (`name = expr`)
+    /// save the right-hand expression and attach `name`; if `name` already
+    /// exists on another entry, that existing named entry is updated instead.
+    pub fn set_statement_by_id(
+        &mut self,
+        id: ExpressionId,
+        input: impl Into<String>,
+    ) -> SetEntryResult {
+        let input = input.into();
+        match parse_statement(&input) {
+            Ok(ParsedStatement::Definition { name, expr }) => {
+                let source = definition_source(&input, &name);
+                let target_id = self.session.entries.name_id(&name).unwrap_or(id);
+                self.session.entries.reserve_id(target_id);
+                self.save_parsed_statement_entry(target_id, Some(name), source, expr)
+            }
+            Ok(ParsedStatement::Expression(expr)) => {
+                let name = self.session.entries.name_for_id(id).cloned();
+                self.session.entries.reserve_id(id);
+                self.save_parsed_statement_entry(id, name, input.trim().to_string(), expr)
+            }
+            Err(err) => {
+                let name = self.session.entries.name_for_id(id).cloned();
+                self.session.entries.reserve_id(id);
+                self.save_statement_parse_error(id, name, input.trim().to_string(), err)
+            }
+        }
+    }
+
     fn set_entry_for_id(
         &mut self,
         id: ExpressionId,
@@ -441,15 +472,27 @@ impl Engine {
             Err(err) => self.save_parse_error(id, name, source, err),
         };
 
-        let target_error = match &execution.state {
-            EntryState::Value(_) => None,
-            EntryState::Error(err) => Some(err.clone()),
-        };
+        set_entry_result_from_execution(execution)
+    }
 
-        SetEntryResult {
-            execution,
-            target_error,
-        }
+    fn save_parsed_statement_entry(
+        &mut self,
+        id: ExpressionId,
+        name: Option<String>,
+        source: String,
+        ast: ParsedExpr,
+    ) -> SetEntryResult {
+        set_entry_result_from_execution(self.save_parsed_entry(id, name, source, ast))
+    }
+
+    fn save_statement_parse_error(
+        &mut self,
+        id: ExpressionId,
+        name: Option<String>,
+        source: String,
+        err: DagcalError,
+    ) -> SetEntryResult {
+        set_entry_result_from_execution(self.save_parse_error(id, name, source, err))
     }
 
     /// Removes an entry by `$n` result reference, name, or stable ID.
@@ -722,6 +765,18 @@ fn definition_source(input: &str, name: &str) -> String {
         right.trim().to_string()
     } else {
         input.trim().to_string()
+    }
+}
+
+fn set_entry_result_from_execution(execution: Execution) -> SetEntryResult {
+    let target_error = match &execution.state {
+        EntryState::Value(_) => None,
+        EntryState::Error(err) => Some(err.clone()),
+    };
+
+    SetEntryResult {
+        execution,
+        target_error,
     }
 }
 

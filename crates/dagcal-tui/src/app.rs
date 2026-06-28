@@ -169,8 +169,9 @@ impl App {
             return;
         }
 
-        let result = self.engine.set_entry_by_id(id, source);
+        let result = self.engine.set_statement_by_id(id, source);
         self.refresh_affected(&result.execution.affected_ids);
+        let id = result.execution.id;
         self.select_id(id);
         if let Some(entry) = self.engine.entry_by_id(id) {
             self.status = format!("{id} = {}", state_summary(&entry.state));

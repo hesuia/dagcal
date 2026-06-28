@@ -70,6 +70,7 @@ impl EntryRepository {
     }
 
     pub(super) fn upsert(&mut self, record: EntryRecord) {
+        self.names.retain(|_, entry_id| *entry_id != record.id);
         if let Some(name) = &record.name {
             self.names.insert(name.clone(), record.id);
         }

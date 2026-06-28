@@ -131,6 +131,60 @@ fn public_api_supports_entry_targets_and_id_specific_methods() {
 }
 
 #[test]
+fn public_api_sets_statement_by_id_as_named_definition() {
+    let mut engine = Engine::new();
+
+    let result = engine.set_statement_by_id(id(1), "x = 2");
+
+    assert!(result.target_error.is_none());
+    assert_eq!(result.execution.id, id(1));
+    let entry = engine.entry_by_id(id(1)).unwrap();
+    assert_eq!(entry.name.as_deref(), Some("x"));
+    assert_eq!(entry.source, "2");
+    assert_value(&engine, id(1), 2.0);
+    assert_eq!(engine.entry("x").unwrap().id, id(1));
+}
+
+#[test]
+fn public_api_set_statement_by_id_renames_without_leaving_old_name() {
+    let mut engine = Engine::new();
+    engine.set_statement_by_id(id(1), "x = 2");
+    engine.execute("x + 1");
+
+    let result = engine.set_statement_by_id(id(1), "y = 3");
+
+    assert!(result.target_error.is_none());
+    assert!(engine.entry("x").is_none());
+    assert_eq!(engine.entry("y").unwrap().id, id(1));
+    assert_value(&engine, id(1), 3.0);
+    assert_value(&engine, id(2), 4.0);
+
+    let stale_name = engine.execute("x + 1");
+    assert_eval_error(
+        &engine,
+        stale_name.id,
+        |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Name(name)) if name == "x"),
+    );
+}
+
+#[test]
+fn public_api_set_statement_by_id_stores_statement_parse_errors_on_target() {
+    let mut engine = Engine::new();
+
+    let result = engine.set_statement_by_id(id(1), "broken = 1 +");
+
+    assert_eq!(result.execution.id, id(1));
+    assert!(result.target_error.is_some());
+    let entry = engine.entry_by_id(id(1)).unwrap();
+    assert_eq!(entry.name, None);
+    assert_eq!(entry.source, "broken = 1 +");
+    assert!(matches!(
+        entry.state,
+        EntryState::Error(DagcalError::Parse(_))
+    ));
+}
+
+#[test]
 fn public_api_reports_invalid_entry_targets_as_structured_parse_errors() {
     let mut engine = Engine::new();
 
