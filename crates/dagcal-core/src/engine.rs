@@ -617,6 +617,21 @@ impl Engine {
             .map_err(DagcalError::Eval)
     }
 
+    /// Parses and evaluates a user input statement without storing it.
+    ///
+    /// Plain expressions are evaluated as-is. Named definitions evaluate only
+    /// the right-hand expression, matching what would be saved by
+    /// [`Engine::execute`] without allocating an ID or mutating the session.
+    pub fn eval_statement_once(&self, source: &str) -> Result<Number, DagcalError> {
+        let expr = match parse_statement(source)? {
+            ParsedStatement::Expression(expr) => expr,
+            ParsedStatement::Definition { expr, .. } => expr,
+        };
+        let ast = self.session.resolve_expr(expr).map_err(DagcalError::Eval)?;
+        self::recompute::eval_once(&ast, &self.session.runtime, &self.session.results)
+            .map_err(DagcalError::Eval)
+    }
+
     fn recompute_constant_references(&mut self, name: &str) {
         let roots = self.session.compiled.ids_referencing_constant(name);
         let affected = self.session.affected_by_any(roots);
@@ -854,6 +869,39 @@ mod tests {
         set_entry(&mut engine, "a", "10").unwrap();
         assert_value(&engine, "b", 20.0);
         assert_value(&engine, "c", 21.0);
+    }
+
+    #[test]
+    fn eval_statement_once_previews_expressions_and_definitions_without_storing() {
+        let mut engine = Engine::new();
+        engine.execute("base = 10");
+
+        assert_eq!(
+            engine.eval_statement_once("1 + 2").unwrap(),
+            Number::from(3)
+        );
+        assert_eq!(
+            engine.eval_statement_once("x = base * 2").unwrap(),
+            Number::from(20)
+        );
+        assert_eq!(engine.entries().len(), 1);
+        assert!(engine.state("x").is_none());
+    }
+
+    #[test]
+    fn eval_statement_once_reports_statement_parse_and_resolve_errors() {
+        let engine = Engine::new();
+
+        assert!(matches!(
+            engine.eval_statement_once("x ="),
+            Err(DagcalError::Parse(_))
+        ));
+        assert!(matches!(
+            engine.eval_statement_once("x = missing + 1"),
+            Err(DagcalError::Eval(EvalError::UnknownReference(
+                ReferenceTarget::Name(name)
+            ))) if name == "missing"
+        ));
     }
 
     #[test]
