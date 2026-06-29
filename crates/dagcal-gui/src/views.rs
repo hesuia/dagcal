@@ -1,9 +1,10 @@
 mod details;
 mod entries;
 mod input;
+mod menu;
 
 use crate::app::{GuiApp, Message};
-use iced::widget::{button, column, container, row, rule, text};
+use iced::widget::{column, container, row, rule, text};
 use iced::{Element, Fill};
 
 impl GuiApp {
@@ -11,6 +12,7 @@ impl GuiApp {
         container(
             column![
                 header_view(),
+                self.menu_bar_view(),
                 self.entries_view(),
                 rule::horizontal(1),
                 self.input_view(),
@@ -28,10 +30,7 @@ impl GuiApp {
 fn header_view() -> Element<'static, Message> {
     row![
         text("dagcal").size(28),
-        text("Expressions are saved as stable $n results").size(14),
-        button("Undo").on_press(Message::Undo),
-        button("Redo").on_press(Message::Redo),
-        button("Clear").on_press(Message::Clear),
+        text("Stable expression graph").size(14),
     ]
     .spacing(12)
     .align_y(iced::Center)

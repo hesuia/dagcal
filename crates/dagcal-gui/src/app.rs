@@ -28,6 +28,8 @@ pub enum Message {
     Clear,
     Undo,
     Redo,
+    InsertConstant(String),
+    InsertFunction(String),
 }
 
 pub struct GuiApp {
@@ -75,6 +77,8 @@ impl GuiApp {
             Message::Clear => self.clear(),
             Message::Undo => self.undo(),
             Message::Redo => self.redo(),
+            Message::InsertConstant(name) => self.insert_constant(name),
+            Message::InsertFunction(name) => self.insert_function(name),
         }
         .into_task(self)
     }

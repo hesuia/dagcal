@@ -38,6 +38,28 @@ fn use_inserts_result_id_for_unnamed_entry() {
 }
 
 #[test]
+fn menu_constant_inserts_constant_name() {
+    let (mut app, _) = GuiApp::new();
+
+    let _ = app.update(Message::InsertConstant("pi".to_string()));
+
+    assert_eq!(app.input.source(), "pi ");
+    assert_eq!(app.status, "Inserted pi");
+    assert_eq!(app.draft_entry, Some(ExpressionId::new(1)));
+}
+
+#[test]
+fn menu_function_inserts_call_template() {
+    let (mut app, _) = GuiApp::new();
+
+    let _ = app.update(Message::InsertFunction("sin".to_string()));
+
+    assert_eq!(app.input.source(), "sin() ");
+    assert_eq!(app.status, "Inserted sin()");
+    assert_eq!(app.draft_entry, Some(ExpressionId::new(1)));
+}
+
+#[test]
 fn selecting_entry_updates_selection_without_entering_edit() {
     let (mut app, _) = GuiApp::new();
     app.input.set("21".to_string());

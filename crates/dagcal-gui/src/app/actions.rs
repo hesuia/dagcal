@@ -108,6 +108,21 @@ impl GuiApp {
         UiEffect::FocusInput
     }
 
+    pub(super) fn insert_constant(&mut self, name: String) -> UiEffect {
+        self.input.insert_token(&name);
+        self.ensure_empty_draft_entry();
+        self.status = format!("Inserted {name}");
+        UiEffect::FocusInput
+    }
+
+    pub(super) fn insert_function(&mut self, name: String) -> UiEffect {
+        let token = format!("{name}()");
+        self.input.insert_token(&token);
+        self.ensure_empty_draft_entry();
+        self.status = format!("Inserted {token}");
+        UiEffect::FocusInput
+    }
+
     pub(super) fn select_entry(&mut self, id: ExpressionId) -> UiEffect {
         if self.engine.entry_by_id(id).is_some() {
             self.set_selected_entry(id);
