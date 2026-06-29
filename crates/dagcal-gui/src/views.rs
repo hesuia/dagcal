@@ -29,6 +29,8 @@ fn header_view() -> Element<'static, Message> {
     row![
         text("dagcal").size(28),
         text("Expressions are saved as stable $n results").size(14),
+        button("Undo").on_press(Message::Undo),
+        button("Redo").on_press(Message::Redo),
         button("Clear").on_press(Message::Clear),
     ]
     .spacing(12)

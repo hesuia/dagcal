@@ -26,6 +26,8 @@ pub enum Message {
     RightClick,
     Keyboard(keyboard::Event),
     Clear,
+    Undo,
+    Redo,
 }
 
 pub struct GuiApp {
@@ -71,6 +73,8 @@ impl GuiApp {
             Message::RightClick => self.select_hovered_entry(),
             Message::Keyboard(event) => self.handle_keyboard_event(event),
             Message::Clear => self.clear(),
+            Message::Undo => self.undo(),
+            Message::Redo => self.redo(),
         }
         .into_task(self)
     }

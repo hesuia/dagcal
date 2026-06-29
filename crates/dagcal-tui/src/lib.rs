@@ -71,6 +71,8 @@ fn handle_normal_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('i') => app.start_insert(),
         KeyCode::Char('e') => app.start_edit(),
         KeyCode::Char('d') => app.delete_selected(),
+        KeyCode::Char('u') => app.undo(),
+        KeyCode::Char('r') => app.redo(),
         KeyCode::Char('c') => app.clear(),
         _ => {}
     }
@@ -158,6 +160,10 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect) {
             Span::raw(" edit  "),
             Span::styled("d", Style::default().fg(Color::Yellow)),
             Span::raw(" delete  "),
+            Span::styled("u", Style::default().fg(Color::Yellow)),
+            Span::raw(" undo  "),
+            Span::styled("r", Style::default().fg(Color::Yellow)),
+            Span::raw(" redo  "),
             Span::styled("q", Style::default().fg(Color::Yellow)),
             Span::raw(" quit"),
         ])

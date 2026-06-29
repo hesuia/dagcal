@@ -214,6 +214,8 @@ impl Session {
 /// ```
 pub struct Engine {
     session: Session,
+    undo_stack: Vec<EngineSnapshot>,
+    redo_stack: Vec<EngineSnapshot>,
 }
 
 impl Default for Engine {
@@ -231,6 +233,8 @@ impl Engine {
     pub fn new() -> Self {
         Self {
             session: Session::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -264,7 +268,7 @@ impl Engine {
     /// returned engine is exposed.
     pub fn from_snapshot(snapshot: EngineSnapshot) -> Result<Self, DagcalError> {
         let mut engine = Self::new();
-        engine.restore_snapshot(snapshot)?;
+        engine.restore_snapshot_untracked(snapshot)?;
         Ok(engine)
     }
 
@@ -281,13 +285,19 @@ impl Engine {
     /// Values and errors are recomputed from source text after the dependency
     /// graph is rebuilt.
     pub fn restore_snapshot(&mut self, snapshot: EngineSnapshot) -> Result<(), DagcalError> {
+        let previous = self.snapshot();
+        self.restore_snapshot_untracked(snapshot)?;
+        self.record_undo(previous);
+        Ok(())
+    }
+
+    fn restore_snapshot_untracked(&mut self, snapshot: EngineSnapshot) -> Result<(), DagcalError> {
         let entries = validate_snapshot(snapshot)?;
-        let mut restored = Self::new();
+        let mut restored_entries = EntryRepository::new();
+        let mut restored_compiled = CompiledEntryStore::new();
 
         for entry in &entries {
-            restored
-                .session
-                .entries
+            restored_entries
                 .reserve_restored_entry(ExpressionId::new(entry.id), entry.name.as_deref());
         }
 
@@ -295,22 +305,86 @@ impl Engine {
             let id = ExpressionId::new(entry.id);
             let record = EntryRecord::new(id, entry.name, entry.source.clone());
             let compiled = match parse_expression(&entry.source) {
-                Ok(ast) => match restored.session.resolve_expr(ast) {
+                Ok(ast) => match resolve_expr(
+                    &SymbolTable::new(&restored_entries, &self.session.runtime),
+                    ast,
+                ) {
                     Ok(ast) => CompiledEntry::from_resolved(ast),
                     Err(err) => CompiledEntry::from_error(DagcalError::Eval(err)),
                 },
                 Err(err) => CompiledEntry::from_error(err),
             };
-            restored.session.entries.upsert(record);
-            restored.session.compiled.insert(id, compiled);
+            restored_entries.upsert(record);
+            restored_compiled.insert(id, compiled);
         }
 
-        restored.session.rebuild_dependencies();
-        let ids = restored.session.entries.ids().collect();
-        restored.session.recompute_ids(ids);
+        self.session.entries = restored_entries;
+        self.session.compiled = restored_compiled;
+        self.session.dependencies = DependencyIndex::new();
+        self.session.results = ResultCache::new();
+        self.session.rebuild_dependencies();
+        let ids = self.session.entries.ids().collect();
+        self.session.recompute_ids(ids);
 
-        *self = restored;
         Ok(())
+    }
+
+    /// Returns `true` when an undo operation is currently available.
+    pub fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    /// Returns `true` when a redo operation is currently available.
+    pub fn can_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+
+    /// Restores the entry state before the most recent successful mutation.
+    ///
+    /// Undo/redo history tracks stored entries, stable IDs, names, source text,
+    /// dependencies, and recomputed entry states. Runtime constants and
+    /// functions are not snapshotted and remain configured on this engine.
+    pub fn undo(&mut self) -> bool {
+        let Some(previous) = self.undo_stack.pop() else {
+            return false;
+        };
+
+        let current = self.snapshot();
+        self.restore_snapshot_untracked(previous)
+            .expect("undo history should contain valid snapshots");
+        self.redo_stack.push(current);
+        true
+    }
+
+    /// Reapplies the most recently undone entry mutation.
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.redo_stack.pop() else {
+            return false;
+        };
+
+        let current = self.snapshot();
+        self.restore_snapshot_untracked(next)
+            .expect("redo history should contain valid snapshots");
+        self.undo_stack.push(current);
+        true
+    }
+
+    /// Removes all stored entries while preserving runtime constants and functions.
+    pub fn clear(&mut self) {
+        if self.entry_count() == 0 {
+            return;
+        }
+
+        let previous = self.snapshot();
+        self.restore_snapshot_untracked(EngineSnapshot::new(Vec::new()))
+            .expect("empty snapshot should be valid");
+        self.record_undo(previous);
+    }
+
+    /// Clears undo and redo history without changing stored entries.
+    pub fn clear_history(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
     }
 
     /// Executes user input as either a named definition (`name = expr`) or a
@@ -324,19 +398,26 @@ impl Engine {
     /// A statement-level parse error is saved as an unnamed error entry so the
     /// original input can be edited later.
     pub fn execute(&mut self, input: &str) -> Execution {
+        let previous = self.snapshot();
         match parse_statement(input) {
             Ok(ParsedStatement::Definition { name, expr }) => {
                 let source = definition_source(input, &name);
                 let (id, name) = self.session.entries.resolve_or_create_name(name);
-                self.save_parsed_entry(id, name, source, expr)
+                let execution = self.save_parsed_entry(id, name, source, expr);
+                self.record_undo(previous);
+                execution
             }
             Ok(ParsedStatement::Expression(expr)) => {
                 let id = self.session.entries.allocate_id();
-                self.save_parsed_entry(id, None, input.trim().to_string(), expr)
+                let execution = self.save_parsed_entry(id, None, input.trim().to_string(), expr);
+                self.record_undo(previous);
+                execution
             }
             Err(err) => {
                 let id = self.session.entries.allocate_id();
-                self.save_parse_error(id, None, input.trim().to_string(), err)
+                let execution = self.save_parse_error(id, None, input.trim().to_string(), err);
+                self.record_undo(previous);
+                execution
             }
         }
     }
@@ -414,8 +495,12 @@ impl Engine {
     where
         T: IntoEntryTarget,
     {
-        let (id, name) = self.resolve_or_create_target(target.into_entry_target()?);
-        Ok(self.set_entry_for_id(id, name, source))
+        let target = target.into_entry_target()?;
+        let previous = self.snapshot();
+        let (id, name) = self.resolve_or_create_target(target);
+        let result = self.set_entry_for_id(id, name, source);
+        self.record_undo(previous);
+        Ok(result)
     }
 
     /// Sets or edits an entry by stable expression ID.
@@ -424,9 +509,12 @@ impl Engine {
         id: ExpressionId,
         source: impl Into<String>,
     ) -> SetEntryResult {
+        let previous = self.snapshot();
         let name = self.session.entries.name_for_id(id).cloned();
         self.session.entries.reserve_id(id);
-        self.set_entry_for_id(id, name, source)
+        let result = self.set_entry_for_id(id, name, source);
+        self.record_undo(previous);
+        result
     }
 
     /// Sets or edits an entry by stable expression ID using statement syntax.
@@ -439,8 +527,9 @@ impl Engine {
         id: ExpressionId,
         input: impl Into<String>,
     ) -> SetEntryResult {
+        let previous = self.snapshot();
         let input = input.into();
-        match parse_statement(&input) {
+        let result = match parse_statement(&input) {
             Ok(ParsedStatement::Definition { name, expr }) => {
                 let source = definition_source(&input, &name);
                 let target_id = self.session.entries.name_id(&name).unwrap_or(id);
@@ -457,7 +546,9 @@ impl Engine {
                 self.session.entries.reserve_id(id);
                 self.save_statement_parse_error(id, name, input.trim().to_string(), err)
             }
-        }
+        };
+        self.record_undo(previous);
+        result
     }
 
     fn set_entry_for_id(
@@ -512,6 +603,7 @@ impl Engine {
 
     /// Removes an entry by stable expression ID.
     pub fn remove_entry_by_id(&mut self, id: ExpressionId) -> Option<EntryRemoval> {
+        let previous = self.snapshot();
         let removed_entry = self.session.entry_view(id)?;
         let affected = self.session.affected_by(id);
         self.session.entries.remove(id)?;
@@ -519,6 +611,7 @@ impl Engine {
         self.session.results.remove(id);
         self.session.rebuild_dependencies();
         self.session.recompute_ids(affected.clone());
+        self.record_undo(previous);
         Some(EntryRemoval {
             removed_entry,
             affected_ids: affected,
@@ -753,6 +846,15 @@ impl Engine {
             EntryTarget::Id(id) => Some(id),
             EntryTarget::Name(name) => self.session.entries.name_id(&name),
         }
+    }
+
+    fn record_undo(&mut self, previous: EngineSnapshot) {
+        if self.snapshot() == previous {
+            return;
+        }
+
+        self.undo_stack.push(previous);
+        self.redo_stack.clear();
     }
 }
 

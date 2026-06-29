@@ -332,6 +332,44 @@ fn delete_key_removes_selected_entry() {
 }
 
 #[test]
+fn undo_and_redo_refresh_entries_and_reset_edit_state() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    app.start_edit(ExpressionId::new(1));
+
+    app.undo();
+    assert!(app.entries.is_empty());
+    assert_eq!(app.selected, None);
+    assert_eq!(app.editing, None);
+    assert_eq!(app.input.source(), "");
+    assert_eq!(app.status, "Undone");
+
+    app.redo();
+    assert_eq!(app.entries.len(), 1);
+    assert_eq!(app.entries[0].id, ExpressionId::new(1));
+    assert_eq!(app.entries[0].state, EntryState::Value(Number::from(10)));
+    assert_eq!(app.selected, Some(ExpressionId::new(1)));
+    assert_eq!(app.status, "Redone");
+}
+
+#[test]
+fn keyboard_shortcuts_trigger_undo_and_redo() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+
+    app.handle_keyboard_event(character_key_event("z", keyboard::Modifiers::CTRL));
+    assert!(app.entries.is_empty());
+    assert_eq!(app.status, "Undone");
+
+    app.handle_keyboard_event(character_key_event("y", keyboard::Modifiers::CTRL));
+    assert_eq!(app.entries.len(), 1);
+    assert_eq!(app.entries[0].state, EntryState::Value(Number::from(10)));
+    assert_eq!(app.status, "Redone");
+}
+
+#[test]
 fn deleting_edited_entry_selects_fallback_without_entering_edit() {
     let (mut app, _) = GuiApp::new();
     app.input.set("10".to_string());
@@ -479,4 +517,16 @@ fn new_entry_after_empty_submit_reuses_existing_empty_entry() {
     assert_eq!(app.draft_entry, Some(ExpressionId::new(1)));
     assert_eq!(app.input.source(), "");
     assert_eq!(app.editing, None);
+}
+
+fn character_key_event(value: &str, modifiers: keyboard::Modifiers) -> keyboard::Event {
+    keyboard::Event::KeyPressed {
+        key: Key::Character(value.into()),
+        modified_key: Key::Character(value.into()),
+        physical_key: key::Physical::Code(key::Code::KeyZ),
+        location: keyboard::Location::Standard,
+        modifiers,
+        text: None,
+        repeat: false,
+    }
 }

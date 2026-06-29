@@ -73,8 +73,24 @@ impl Repl {
                 true
             }
             ":clear" => {
-                self.engine = Engine::new();
+                self.engine.clear();
                 println!("cleared");
+                true
+            }
+            ":undo" => {
+                if self.engine.undo() {
+                    println!("undone");
+                } else {
+                    println!("nothing to undo");
+                }
+                true
+            }
+            ":redo" => {
+                if self.engine.redo() {
+                    println!("redone");
+                } else {
+                    println!("nothing to redo");
+                }
                 true
             }
             ":set" => {
@@ -175,6 +191,8 @@ fn print_help() {
     println!("  :set <id> <expr>   Set or edit an expression");
     println!("  :remove <id>       Remove an expression");
     println!("  :clear             Clear all expressions");
+    println!("  :undo              Undo the last change");
+    println!("  :redo              Redo the last undone change");
     println!("  :quit, :exit       Exit");
 }
 

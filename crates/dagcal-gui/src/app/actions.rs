@@ -153,6 +153,16 @@ impl GuiApp {
                 key: Key::Named(key::Named::Delete),
                 ..
             } => self.delete_selected_entry(),
+            keyboard::Event::KeyPressed { key, modifiers, .. }
+                if modifiers.control() && is_character_key(&key, "z") =>
+            {
+                self.undo();
+            }
+            keyboard::Event::KeyPressed { key, modifiers, .. }
+                if modifiers.control() && is_character_key(&key, "y") =>
+            {
+                self.redo();
+            }
             _ => {}
         }
 
@@ -160,14 +170,34 @@ impl GuiApp {
     }
 
     pub(super) fn clear(&mut self) -> UiEffect {
-        self.engine = dagcal_core::Engine::new();
-        self.entries.clear();
+        self.engine.clear();
+        self.entries = self.engine.entries();
         self.input.clear();
         self.editing = None;
         self.draft_entry = None;
         self.selected = None;
         self.hovered_entry = None;
         self.status = "Cleared".to_string();
+        UiEffect::None
+    }
+
+    pub(super) fn undo(&mut self) -> UiEffect {
+        if self.engine.undo() {
+            self.reset_after_history_restore("Undone");
+        } else {
+            self.status = "Nothing to undo".to_string();
+        }
+
+        UiEffect::None
+    }
+
+    pub(super) fn redo(&mut self) -> UiEffect {
+        if self.engine.redo() {
+            self.reset_after_history_restore("Redone");
+        } else {
+            self.status = "Nothing to redo".to_string();
+        }
+
         UiEffect::None
     }
 
@@ -342,6 +372,19 @@ impl GuiApp {
             None => format!("{id} updated"),
         }
     }
+
+    fn reset_after_history_restore(&mut self, status: &str) {
+        self.entries = self.engine.entries();
+        self.input.clear();
+        self.editing = None;
+        self.draft_entry = None;
+        self.hovered_entry = None;
+        self.selected = self
+            .selected
+            .filter(|id| self.engine.entry_by_id(*id).is_some())
+            .or_else(|| self.entries.last().map(|entry| entry.id));
+        self.status = status.to_string();
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -357,4 +400,8 @@ enum SelectionStatus {
 
 fn unavailable_status(id: ExpressionId) -> String {
     format!("{id} is not available")
+}
+
+fn is_character_key(key: &Key, expected: &str) -> bool {
+    matches!(key, Key::Character(value) if value.eq_ignore_ascii_case(expected))
 }

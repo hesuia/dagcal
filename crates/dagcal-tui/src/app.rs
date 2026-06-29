@@ -32,7 +32,8 @@ impl App {
             selected: 0,
             mode: Mode::Normal,
             input: String::new(),
-            status: "i: insert  e: edit  d: delete  c: clear  q: quit".to_string(),
+            status: "i: insert  e: edit  d: delete  u: undo  r: redo  c: clear  q: quit"
+                .to_string(),
             should_quit: false,
         }
     }
@@ -134,12 +135,33 @@ impl App {
     }
 
     pub fn clear(&mut self) {
-        self.engine = Engine::new();
-        self.entries.clear();
-        self.selected = 0;
+        self.engine.clear();
+        self.refresh_cache();
         self.mode = Mode::Normal;
         self.input.clear();
         self.status = "cleared".to_string();
+    }
+
+    pub fn undo(&mut self) {
+        if self.engine.undo() {
+            self.refresh_cache();
+            self.mode = Mode::Normal;
+            self.input.clear();
+            self.status = "undone".to_string();
+        } else {
+            self.status = "nothing to undo".to_string();
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if self.engine.redo() {
+            self.refresh_cache();
+            self.mode = Mode::Normal;
+            self.input.clear();
+            self.status = "redone".to_string();
+        } else {
+            self.status = "nothing to redo".to_string();
+        }
     }
 
     fn submit_insert(&mut self) {
@@ -226,7 +248,6 @@ impl App {
         }
     }
 
-    #[cfg(test)]
     fn refresh_cache(&mut self) {
         self.entries = self.engine.entries();
         self.clamp_selection();
@@ -339,6 +360,28 @@ mod tests {
         let entries = app.entries();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id.to_string(), "$2");
+    }
+
+    #[test]
+    fn undo_and_redo_refresh_cached_entries() {
+        let mut app = App::new();
+
+        app.start_insert();
+        for ch in "10".chars() {
+            app.push_input(ch);
+        }
+        app.submit_input();
+
+        app.undo();
+        assert!(app.entries().is_empty());
+        assert_eq!(app.status(), "undone");
+
+        app.redo();
+        let entries = app.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, ExpressionId::new(1));
+        assert_eq!(entries[0].state, EntryState::Value(Number::from(10)));
+        assert_eq!(app.status(), "redone");
     }
 
     #[test]
