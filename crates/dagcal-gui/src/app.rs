@@ -6,6 +6,8 @@ use iced::keyboard::{self, Key, key};
 use iced::{Subscription, Task, event, mouse};
 use std::collections::BTreeSet;
 
+pub(crate) const EXPRESSION_INPUT_ID: &str = "expression-input";
+
 #[derive(Debug, Clone)]
 pub enum Message {
     InputChanged(String),
@@ -56,22 +58,57 @@ impl GuiApp {
             Message::InputChanged(value) => {
                 self.input.set(value);
                 self.ensure_empty_draft_entry();
+                Task::none()
             }
-            Message::Submit => self.submit_input(),
-            Message::NewEntry => self.start_new_entry(),
-            Message::Edit(id) => self.start_edit(id),
-            Message::CancelEdit => self.cancel_edit(),
-            Message::Delete(id) => self.delete_entry(id),
-            Message::InsertReference(id) => self.insert_reference(id),
-            Message::Select(id) => self.select_entry(id),
-            Message::EntryHovered(id) => self.hovered_entry = Some(id),
-            Message::EntryUnhovered(id) => self.clear_hovered_entry(id),
-            Message::RightClick => self.select_hovered_entry(),
-            Message::Keyboard(event) => self.handle_keyboard_event(event),
-            Message::Clear => self.clear(),
+            Message::Submit => {
+                self.submit_input();
+                Task::none()
+            }
+            Message::NewEntry => {
+                self.start_new_entry();
+                Task::none()
+            }
+            Message::Edit(id) => {
+                self.start_edit(id);
+                Task::none()
+            }
+            Message::CancelEdit => {
+                self.cancel_edit();
+                Task::none()
+            }
+            Message::Delete(id) => {
+                self.delete_entry(id);
+                Task::none()
+            }
+            Message::InsertReference(id) => {
+                self.insert_reference(id);
+                focus_expression_input()
+            }
+            Message::Select(id) => {
+                self.select_entry(id);
+                Task::none()
+            }
+            Message::EntryHovered(id) => {
+                self.hovered_entry = Some(id);
+                Task::none()
+            }
+            Message::EntryUnhovered(id) => {
+                self.clear_hovered_entry(id);
+                Task::none()
+            }
+            Message::RightClick => {
+                self.select_hovered_entry();
+                Task::none()
+            }
+            Message::Keyboard(event) => {
+                self.handle_keyboard_event(event);
+                Task::none()
+            }
+            Message::Clear => {
+                self.clear();
+                Task::none()
+            }
         }
-
-        Task::none()
     }
 
     pub(crate) fn subscription(&self) -> Subscription<Message> {
@@ -100,7 +137,7 @@ impl GuiApp {
                 Some(entry) => format!("{id} = {}", state_summary(&entry.state)),
                 None => format!("{id} updated"),
             };
-            self.load_selected_entry(id, SelectionStatus::Keep);
+            self.load_edit_entry(id, SelectionStatus::Keep);
         } else if let Some(id) = self.draft_entry.take() {
             self.save_new_entry_draft(id, source);
         } else {
@@ -114,7 +151,7 @@ impl GuiApp {
     }
 
     fn start_edit(&mut self, id: ExpressionId) {
-        self.load_selected_entry(id, SelectionStatus::Set(format!("Editing {id}")));
+        self.load_edit_entry(id, SelectionStatus::Set(format!("Editing {id}")));
     }
 
     fn start_new_entry(&mut self) {
@@ -124,7 +161,7 @@ impl GuiApp {
         self.ensure_empty_draft_entry();
     }
 
-    fn load_selected_entry(&mut self, id: ExpressionId, status: SelectionStatus) -> bool {
+    fn load_edit_entry(&mut self, id: ExpressionId, status: SelectionStatus) -> bool {
         match self.engine.entry_by_id(id) {
             Some(entry) => {
                 self.draft_entry = None;
@@ -165,14 +202,12 @@ impl GuiApp {
             self.refresh_affected(&removal.affected_ids);
             if self.selected == Some(id) {
                 self.selected = self.entries.last().map(|entry| entry.id);
-                if let Some(id) = self.selected {
-                    self.load_selected_entry(id, SelectionStatus::Keep);
-                } else {
+                if self.selected.is_none() {
                     self.editing = None;
                     self.input.clear();
                 }
             }
-            if was_editing && self.selected.is_none() {
+            if was_editing {
                 self.editing = None;
                 self.input.clear();
             }
@@ -196,7 +231,9 @@ impl GuiApp {
     }
 
     fn select_entry(&mut self, id: ExpressionId) {
-        if !self.load_selected_entry(id, SelectionStatus::Keep) {
+        if self.engine.entry_by_id(id).is_some() {
+            self.selected = Some(id);
+        } else {
             self.status = format!("{id} is not available");
         }
     }
@@ -257,7 +294,7 @@ impl GuiApp {
             },
         };
 
-        self.load_selected_entry(self.entries[next_index].id, SelectionStatus::Keep);
+        self.selected = Some(self.entries[next_index].id);
     }
 
     fn selection_navigation_enabled(&self) -> bool {
@@ -354,6 +391,13 @@ impl GuiApp {
     }
 }
 
+fn focus_expression_input() -> Task<Message> {
+    Task::batch([
+        iced::widget::operation::focus(EXPRESSION_INPUT_ID),
+        iced::widget::operation::move_cursor_to_end(EXPRESSION_INPUT_ID),
+    ])
+}
+
 #[derive(Debug, Clone, Copy)]
 enum SelectionDirection {
     Previous,
@@ -447,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn selecting_entry_loads_source_without_replacing_status() {
+    fn selecting_entry_updates_selection_without_entering_edit() {
         let (mut app, _) = GuiApp::new();
         app.input.set("21".to_string());
         app.submit_input();
@@ -456,8 +500,8 @@ mod tests {
         app.select_entry(ExpressionId::new(1));
 
         assert_eq!(app.selected, Some(ExpressionId::new(1)));
-        assert_eq!(app.editing, Some(ExpressionId::new(1)));
-        assert_eq!(app.input.source(), "21");
+        assert_eq!(app.editing, None);
+        assert_eq!(app.input.source(), "");
         assert_eq!(app.status, "Ready");
     }
 
@@ -474,7 +518,8 @@ mod tests {
         app.select_hovered_entry();
 
         assert_eq!(app.selected, Some(ExpressionId::new(2)));
-        assert_eq!(app.input.source(), "20");
+        assert_eq!(app.editing, None);
+        assert_eq!(app.input.source(), "");
     }
 
     #[test]
@@ -504,14 +549,16 @@ mod tests {
 
         app.move_selection(SelectionDirection::Next);
         assert_eq!(app.selected, Some(ExpressionId::new(1)));
-        assert_eq!(app.input.source(), "10");
+        assert_eq!(app.editing, None);
+        assert_eq!(app.input.source(), "");
 
         app.selected = None;
         app.editing = None;
         app.input.clear();
         app.move_selection(SelectionDirection::Previous);
         assert_eq!(app.selected, Some(ExpressionId::new(2)));
-        assert_eq!(app.input.source(), "20");
+        assert_eq!(app.editing, None);
+        assert_eq!(app.input.source(), "");
     }
 
     #[test]
@@ -525,19 +572,23 @@ mod tests {
         app.selected = Some(ExpressionId::new(1));
         app.move_selection(SelectionDirection::Next);
         assert_eq!(app.selected, Some(ExpressionId::new(2)));
-        assert_eq!(app.input.source(), "20");
+        assert_eq!(app.editing, None);
+        assert_eq!(app.input.source(), "");
 
         app.move_selection(SelectionDirection::Next);
         assert_eq!(app.selected, Some(ExpressionId::new(2)));
-        assert_eq!(app.input.source(), "20");
+        assert_eq!(app.editing, None);
+        assert_eq!(app.input.source(), "");
 
         app.move_selection(SelectionDirection::Previous);
         assert_eq!(app.selected, Some(ExpressionId::new(1)));
-        assert_eq!(app.input.source(), "10");
+        assert_eq!(app.editing, None);
+        assert_eq!(app.input.source(), "");
 
         app.move_selection(SelectionDirection::Previous);
         assert_eq!(app.selected, Some(ExpressionId::new(1)));
-        assert_eq!(app.input.source(), "10");
+        assert_eq!(app.editing, None);
+        assert_eq!(app.input.source(), "");
     }
 
     #[test]
@@ -575,12 +626,12 @@ mod tests {
     }
 
     #[test]
-    fn submit_after_select_updates_existing_entry() {
+    fn submit_after_start_edit_updates_existing_entry() {
         let (mut app, _) = GuiApp::new();
         app.input.set("10".to_string());
         app.submit_input();
 
-        app.select_entry(ExpressionId::new(1));
+        app.start_edit(ExpressionId::new(1));
         app.input.set("30".to_string());
         app.submit_input();
 
@@ -663,7 +714,25 @@ mod tests {
         assert_eq!(app.entries.len(), 1);
         assert_eq!(app.entries[0].id, ExpressionId::new(2));
         assert_eq!(app.selected, Some(ExpressionId::new(2)));
+        assert_eq!(app.editing, None);
         assert_eq!(app.status, "Removed $1");
+    }
+
+    #[test]
+    fn deleting_edited_entry_selects_fallback_without_entering_edit() {
+        let (mut app, _) = GuiApp::new();
+        app.input.set("10".to_string());
+        app.submit_input();
+        app.input.set("20".to_string());
+        app.submit_input();
+
+        app.start_edit(ExpressionId::new(1));
+        app.delete_entry(ExpressionId::new(1));
+
+        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.selected, Some(ExpressionId::new(2)));
+        assert_eq!(app.editing, None);
+        assert_eq!(app.input.source(), "");
     }
 
     #[test]
@@ -724,12 +793,12 @@ mod tests {
     }
 
     #[test]
-    fn selected_entry_can_be_saved_as_named_definition() {
+    fn edited_entry_can_be_saved_as_named_definition() {
         let (mut app, _) = GuiApp::new();
         app.input.set("10".to_string());
         app.submit_input();
 
-        app.select_entry(ExpressionId::new(1));
+        app.start_edit(ExpressionId::new(1));
         app.input.set("x=2".to_string());
         app.submit_input();
 
@@ -767,7 +836,7 @@ mod tests {
         let (mut app, _) = GuiApp::new();
         app.input.set("10".to_string());
         app.submit_input();
-        app.select_entry(ExpressionId::new(1));
+        app.start_edit(ExpressionId::new(1));
 
         let _ = app.update(Message::NewEntry);
         let _ = app.update(Message::InputChanged("20".to_string()));
