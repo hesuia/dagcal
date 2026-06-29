@@ -180,7 +180,7 @@ fn entry_header() -> Element<'static, Message> {
         text("ID").width(Length::Fixed(60.0)),
         text("Expression").width(Length::FillPortion(3)),
         text("Result").width(Length::FillPortion(2)),
-        text("Actions").width(Length::Fixed(150.0)),
+        text("Use").width(Length::Fixed(80.0)),
     ]
     .spacing(8)
     .into()
@@ -203,12 +203,8 @@ fn entry_row<'a>(
                 .width(Length::Fixed(60.0)),
                 expression_view(entry, entries),
                 result_view(&entry.state, draft),
-                row![
-                    button("Use").on_press(Message::InsertReference(entry.id)),
-                    button("Edit").on_press(Message::Edit(entry.id)),
-                ]
-                .spacing(6)
-                .width(Length::Fixed(150.0)),
+                row![button("Use").on_press(Message::InsertReference(entry.id)),]
+                    .width(Length::Fixed(80.0)),
             ]
             .spacing(8)
             .align_y(iced::Center),
@@ -227,7 +223,6 @@ fn entry_row<'a>(
 fn entry_context_menu(id: ExpressionId) -> Element<'static, Message> {
     container(
         column![
-            context_menu_item("Use", Message::InsertReference(id)),
             context_menu_item("Edit", Message::Edit(id)),
             context_menu_item("Delete", Message::Delete(id)),
         ]
