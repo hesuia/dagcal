@@ -217,7 +217,9 @@ fn entry_row<'a>(
         .width(Fill)
         .style(move |_| row_container_style(selected)),
     )
-    .on_press(Message::Select(entry.id));
+    .on_press(Message::Select(entry.id))
+    .on_enter(Message::EntryHovered(entry.id))
+    .on_exit(Message::EntryUnhovered(entry.id));
 
     ContextMenu::new(row, move || entry_context_menu(entry.id)).into()
 }

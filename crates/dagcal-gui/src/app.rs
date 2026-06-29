@@ -3,7 +3,7 @@ use crate::formatting::{
 };
 use dagcal_core::{Engine, EntryView, ExpressionId};
 use iced::keyboard::{self, Key, key};
-use iced::{Subscription, Task};
+use iced::{Subscription, Task, event, mouse};
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone)]
@@ -16,6 +16,9 @@ pub enum Message {
     Delete(ExpressionId),
     InsertReference(ExpressionId),
     Select(ExpressionId),
+    EntryHovered(ExpressionId),
+    EntryUnhovered(ExpressionId),
+    RightClick,
     Keyboard(keyboard::Event),
     Clear,
 }
@@ -27,6 +30,7 @@ pub struct GuiApp {
     pub(crate) editing: Option<ExpressionId>,
     pub(crate) draft_entry: Option<ExpressionId>,
     pub(crate) selected: Option<ExpressionId>,
+    pub(crate) hovered_entry: Option<ExpressionId>,
     pub(crate) status: String,
 }
 
@@ -40,6 +44,7 @@ impl GuiApp {
                 editing: None,
                 draft_entry: None,
                 selected: None,
+                hovered_entry: None,
                 status: "Ready".to_string(),
             },
             Task::none(),
@@ -59,6 +64,9 @@ impl GuiApp {
             Message::Delete(id) => self.delete_entry(id),
             Message::InsertReference(id) => self.insert_reference(id),
             Message::Select(id) => self.select_entry(id),
+            Message::EntryHovered(id) => self.hovered_entry = Some(id),
+            Message::EntryUnhovered(id) => self.clear_hovered_entry(id),
+            Message::RightClick => self.select_hovered_entry(),
             Message::Keyboard(event) => self.handle_keyboard_event(event),
             Message::Clear => self.clear(),
         }
@@ -67,10 +75,17 @@ impl GuiApp {
     }
 
     pub(crate) fn subscription(&self) -> Subscription<Message> {
+        let right_clicks = event::listen_with(|event, _status, _window| match event {
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
+                Some(Message::RightClick)
+            }
+            _ => None,
+        });
+
         if self.selection_navigation_enabled() {
-            keyboard::listen().map(Message::Keyboard)
+            Subscription::batch([keyboard::listen().map(Message::Keyboard), right_clicks])
         } else {
-            Subscription::none()
+            right_clicks
         }
     }
 
@@ -141,6 +156,9 @@ impl GuiApp {
             self.entries
                 .retain(|entry| entry.id != removal.removed_entry.id);
             let was_editing = self.editing == Some(id);
+            if self.hovered_entry == Some(id) {
+                self.hovered_entry = None;
+            }
             if self.draft_entry == Some(id) {
                 self.draft_entry = None;
             }
@@ -180,6 +198,18 @@ impl GuiApp {
     fn select_entry(&mut self, id: ExpressionId) {
         if !self.load_selected_entry(id, SelectionStatus::Keep) {
             self.status = format!("{id} is not available");
+        }
+    }
+
+    fn clear_hovered_entry(&mut self, id: ExpressionId) {
+        if self.hovered_entry == Some(id) {
+            self.hovered_entry = None;
+        }
+    }
+
+    fn select_hovered_entry(&mut self) {
+        if let Some(id) = self.hovered_entry {
+            self.select_entry(id);
         }
     }
 
@@ -242,6 +272,7 @@ impl GuiApp {
         self.editing = None;
         self.draft_entry = None;
         self.selected = None;
+        self.hovered_entry = None;
         self.status = "Cleared".to_string();
     }
 
@@ -428,6 +459,36 @@ mod tests {
         assert_eq!(app.editing, Some(ExpressionId::new(1)));
         assert_eq!(app.input.source(), "21");
         assert_eq!(app.status, "Ready");
+    }
+
+    #[test]
+    fn right_click_selects_hovered_entry() {
+        let (mut app, _) = GuiApp::new();
+        app.input.set("10".to_string());
+        app.submit_input();
+        app.input.set("20".to_string());
+        app.submit_input();
+        app.selected = Some(ExpressionId::new(1));
+
+        app.hovered_entry = Some(ExpressionId::new(2));
+        app.select_hovered_entry();
+
+        assert_eq!(app.selected, Some(ExpressionId::new(2)));
+        assert_eq!(app.input.source(), "20");
+    }
+
+    #[test]
+    fn right_click_ignores_cleared_hovered_entry() {
+        let (mut app, _) = GuiApp::new();
+        app.input.set("10".to_string());
+        app.submit_input();
+        app.hovered_entry = Some(ExpressionId::new(1));
+        app.clear_hovered_entry(ExpressionId::new(1));
+
+        app.selected = None;
+        app.select_hovered_entry();
+
+        assert_eq!(app.selected, None);
     }
 
     #[test]
