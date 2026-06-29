@@ -1,4 +1,4 @@
-use crate::app::{GuiApp, Message};
+use crate::app::{ENTRIES_SCROLLABLE_ID, EXPRESSION_INPUT_ID, GuiApp, Message};
 use crate::formatting::{
     entry_expression_source, entry_set_summary, expression_spans, resolved_source,
     table_state_summary,
@@ -56,7 +56,10 @@ impl GuiApp {
             }
         }
 
-        scrollable(list).height(Length::FillPortion(3)).into()
+        scrollable(list)
+            .id(ENTRIES_SCROLLABLE_ID)
+            .height(Length::FillPortion(3))
+            .into()
     }
 
     fn selected_detail_view(&self) -> Element<'_, Message> {
@@ -124,6 +127,7 @@ impl GuiApp {
         let preview = self.preview_summary(source);
 
         let input = text_input("1 + 2, subtotal = 100, or $1 * 3", source)
+            .id(EXPRESSION_INPUT_ID)
             .on_input(Message::InputChanged)
             .on_submit(Message::Submit)
             .padding(10)

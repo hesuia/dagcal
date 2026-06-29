@@ -7,6 +7,7 @@ use iced::{Subscription, Task, event, mouse};
 use std::collections::BTreeSet;
 
 pub(crate) const EXPRESSION_INPUT_ID: &str = "expression-input";
+pub(crate) const ENTRIES_SCROLLABLE_ID: &str = "entries-scrollable";
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -57,16 +58,25 @@ impl GuiApp {
         match message {
             Message::InputChanged(value) => {
                 self.input.set(value);
-                self.ensure_empty_draft_entry();
-                Task::none()
+                if self.ensure_empty_draft_entry() {
+                    self.scroll_entries_to_selection()
+                } else {
+                    Task::none()
+                }
             }
             Message::Submit => {
-                self.submit_input();
-                Task::none()
+                if self.submit_input() {
+                    self.scroll_entries_to_selection()
+                } else {
+                    Task::none()
+                }
             }
             Message::NewEntry => {
-                self.start_new_entry();
-                Task::none()
+                if self.start_new_entry() {
+                    self.scroll_entries_to_selection()
+                } else {
+                    Task::none()
+                }
             }
             Message::Edit(id) => {
                 self.start_edit(id);
@@ -126,7 +136,7 @@ impl GuiApp {
         }
     }
 
-    fn submit_input(&mut self) {
+    fn submit_input(&mut self) -> bool {
         let source = self.input.source().trim().to_string();
 
         if let Some(id) = self.editing {
@@ -138,8 +148,10 @@ impl GuiApp {
                 None => format!("{id} updated"),
             };
             self.load_edit_entry(id, SelectionStatus::Keep);
+            false
         } else if let Some(id) = self.draft_entry.take() {
             self.save_new_entry_draft(id, source);
+            true
         } else {
             let execution = self.engine.execute(&source);
             self.refresh_affected(&execution.affected_ids);
@@ -147,6 +159,7 @@ impl GuiApp {
             self.status = format!("{} = {}", execution.id, state_summary(&execution.state));
             self.editing = None;
             self.input.clear();
+            true
         }
     }
 
@@ -154,11 +167,11 @@ impl GuiApp {
         self.load_edit_entry(id, SelectionStatus::Set(format!("Editing {id}")));
     }
 
-    fn start_new_entry(&mut self) {
+    fn start_new_entry(&mut self) -> bool {
         self.editing = None;
         self.draft_entry = None;
         self.input.clear();
-        self.ensure_empty_draft_entry();
+        self.ensure_empty_draft_entry()
     }
 
     fn load_edit_entry(&mut self, id: ExpressionId, status: SelectionStatus) -> bool {
@@ -232,9 +245,20 @@ impl GuiApp {
 
     fn select_entry(&mut self, id: ExpressionId) {
         if self.engine.entry_by_id(id).is_some() {
-            self.selected = Some(id);
+            self.set_selected_entry(id);
         } else {
             self.status = format!("{id} is not available");
+        }
+    }
+
+    fn set_selected_entry(&mut self, id: ExpressionId) {
+        let changed = self.selected != Some(id);
+        self.selected = Some(id);
+
+        if changed && self.editing.is_some() {
+            self.editing = None;
+            self.input.clear();
+            self.status = "Edit cancelled".to_string();
         }
     }
 
@@ -294,7 +318,7 @@ impl GuiApp {
             },
         };
 
-        self.selected = Some(self.entries[next_index].id);
+        self.set_selected_entry(self.entries[next_index].id);
     }
 
     fn selection_navigation_enabled(&self) -> bool {
@@ -313,28 +337,29 @@ impl GuiApp {
         self.status = "Cleared".to_string();
     }
 
-    fn ensure_empty_draft_entry(&mut self) {
+    fn ensure_empty_draft_entry(&mut self) -> bool {
         if self.editing.is_some() {
-            return;
+            return false;
         }
 
         if self
             .draft_entry
             .is_some_and(|id| self.engine.entry_by_id(id).is_some())
         {
-            return;
+            return false;
         }
 
-        let id = if let Some(id) = self.find_empty_entry_id() {
-            id
+        let (id, should_scroll) = if let Some(id) = self.find_empty_entry_id() {
+            (id, true)
         } else {
             let execution = self.engine.execute("");
             self.refresh_affected(&execution.affected_ids);
-            execution.id
+            (execution.id, true)
         };
 
         self.draft_entry = Some(id);
         self.selected = Some(id);
+        should_scroll
     }
 
     fn find_empty_entry_id(&self) -> Option<ExpressionId> {
@@ -388,6 +413,27 @@ impl GuiApp {
             Ok(index) => self.entries[index] = entry,
             Err(index) => self.entries.insert(index, entry),
         }
+    }
+
+    fn scroll_entries_to_selection(&self) -> Task<Message> {
+        let Some(selected) = self.selected else {
+            return Task::none();
+        };
+
+        let Some(index) = self.entries.iter().position(|entry| entry.id == selected) else {
+            return Task::none();
+        };
+
+        let y = if self.entries.len() <= 1 {
+            0.0
+        } else {
+            index as f32 / (self.entries.len() - 1) as f32
+        };
+
+        iced::widget::operation::snap_to(
+            ENTRIES_SCROLLABLE_ID,
+            iced::widget::operation::RelativeOffset { x: 0.0, y },
+        )
     }
 }
 
@@ -523,6 +569,38 @@ mod tests {
     }
 
     #[test]
+    fn selecting_different_entry_cancels_edit() {
+        let (mut app, _) = GuiApp::new();
+        app.input.set("10".to_string());
+        app.submit_input();
+        app.input.set("20".to_string());
+        app.submit_input();
+
+        app.start_edit(ExpressionId::new(1));
+        app.select_entry(ExpressionId::new(2));
+
+        assert_eq!(app.selected, Some(ExpressionId::new(2)));
+        assert_eq!(app.editing, None);
+        assert_eq!(app.input.source(), "");
+        assert_eq!(app.status, "Edit cancelled");
+    }
+
+    #[test]
+    fn selecting_edited_entry_keeps_edit_active() {
+        let (mut app, _) = GuiApp::new();
+        app.input.set("10".to_string());
+        app.submit_input();
+
+        app.start_edit(ExpressionId::new(1));
+        app.select_entry(ExpressionId::new(1));
+
+        assert_eq!(app.selected, Some(ExpressionId::new(1)));
+        assert_eq!(app.editing, Some(ExpressionId::new(1)));
+        assert_eq!(app.input.source(), "10");
+        assert_eq!(app.status, "Editing $1");
+    }
+
+    #[test]
     fn right_click_ignores_cleared_hovered_entry() {
         let (mut app, _) = GuiApp::new();
         app.input.set("10".to_string());
@@ -589,6 +667,40 @@ mod tests {
         assert_eq!(app.selected, Some(ExpressionId::new(1)));
         assert_eq!(app.editing, None);
         assert_eq!(app.input.source(), "");
+    }
+
+    #[test]
+    fn arrow_navigation_from_edit_cancels_edit_when_selection_changes() {
+        let (mut app, _) = GuiApp::new();
+        app.input.set("10".to_string());
+        app.submit_input();
+        app.input.set("20".to_string());
+        app.submit_input();
+
+        app.start_edit(ExpressionId::new(1));
+        app.move_selection(SelectionDirection::Next);
+
+        assert_eq!(app.selected, Some(ExpressionId::new(2)));
+        assert_eq!(app.editing, None);
+        assert_eq!(app.input.source(), "");
+        assert_eq!(app.status, "Edit cancelled");
+    }
+
+    #[test]
+    fn arrow_navigation_at_edge_keeps_edit_active_when_selection_does_not_change() {
+        let (mut app, _) = GuiApp::new();
+        app.input.set("10".to_string());
+        app.submit_input();
+        app.input.set("20".to_string());
+        app.submit_input();
+
+        app.start_edit(ExpressionId::new(2));
+        app.move_selection(SelectionDirection::Next);
+
+        assert_eq!(app.selected, Some(ExpressionId::new(2)));
+        assert_eq!(app.editing, Some(ExpressionId::new(2)));
+        assert_eq!(app.input.source(), "20");
+        assert_eq!(app.status, "Editing $2");
     }
 
     #[test]
