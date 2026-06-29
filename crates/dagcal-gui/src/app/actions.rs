@@ -1,0 +1,360 @@
+use super::effects::{ENTRIES_SCROLLABLE_ID, UiEffect};
+use super::{GuiApp, Message};
+use crate::formatting::{entry_expression_source, entry_reference_token, state_summary};
+use dagcal_core::{EntryView, ExpressionId};
+use iced::Task;
+use iced::keyboard::{self, Key, key};
+use std::collections::BTreeSet;
+
+impl GuiApp {
+    pub(super) fn input_changed(&mut self, value: String) -> UiEffect {
+        self.input.set(value);
+        if self.ensure_empty_draft_entry() {
+            UiEffect::ScrollToSelection
+        } else {
+            UiEffect::None
+        }
+    }
+
+    pub(super) fn submit_input(&mut self) -> UiEffect {
+        let source = self.input.source().trim().to_string();
+
+        if let Some(id) = self.editing {
+            let result = self.engine.set_statement_by_id(id, source);
+            self.refresh_affected(&result.execution.affected_ids);
+            let id = result.execution.id;
+            self.status = self.entry_status(id);
+            self.load_edit_entry(id, SelectionStatus::Keep);
+            UiEffect::None
+        } else if let Some(id) = self.draft_entry.take() {
+            self.save_new_entry_draft(id, source);
+            UiEffect::ScrollToSelection
+        } else {
+            let execution = self.engine.execute(&source);
+            self.refresh_affected(&execution.affected_ids);
+            self.selected = Some(execution.id);
+            self.status = format!("{} = {}", execution.id, state_summary(&execution.state));
+            self.editing = None;
+            self.input.clear();
+            UiEffect::ScrollToSelection
+        }
+    }
+
+    pub(super) fn start_edit(&mut self, id: ExpressionId) -> UiEffect {
+        self.load_edit_entry(id, SelectionStatus::Set(format!("Editing {id}")));
+        UiEffect::None
+    }
+
+    pub(super) fn start_new_entry(&mut self) -> UiEffect {
+        self.editing = None;
+        self.draft_entry = None;
+        self.input.clear();
+        if self.ensure_empty_draft_entry() {
+            UiEffect::ScrollToSelection
+        } else {
+            UiEffect::None
+        }
+    }
+
+    pub(super) fn cancel_edit(&mut self) -> UiEffect {
+        self.editing = None;
+        self.input.clear();
+        self.status = "Edit cancelled".to_string();
+        UiEffect::None
+    }
+
+    pub(super) fn delete_entry(&mut self, id: ExpressionId) -> UiEffect {
+        if let Some(removal) = self.engine.remove_entry_by_id(id) {
+            self.entries
+                .retain(|entry| entry.id != removal.removed_entry.id);
+            let was_editing = self.editing == Some(id);
+            if self.hovered_entry == Some(id) {
+                self.hovered_entry = None;
+            }
+            if self.draft_entry == Some(id) {
+                self.draft_entry = None;
+            }
+            self.refresh_affected(&removal.affected_ids);
+            if self.selected == Some(id) {
+                self.selected = self.entries.last().map(|entry| entry.id);
+                if self.selected.is_none() {
+                    self.editing = None;
+                    self.input.clear();
+                }
+            }
+            if was_editing {
+                self.editing = None;
+                self.input.clear();
+            }
+            self.status = format!("Removed {id}");
+        } else {
+            self.status = unavailable_status(id);
+        }
+
+        UiEffect::None
+    }
+
+    pub(super) fn insert_reference(&mut self, id: ExpressionId) -> UiEffect {
+        let token = self
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .map(entry_reference_token)
+            .unwrap_or_else(|| id.to_string());
+
+        self.input.insert_token(&token);
+        self.ensure_empty_draft_entry();
+        self.status = format!("Inserted {token}");
+        UiEffect::FocusInput
+    }
+
+    pub(super) fn select_entry(&mut self, id: ExpressionId) -> UiEffect {
+        if self.engine.entry_by_id(id).is_some() {
+            self.set_selected_entry(id);
+        } else {
+            self.status = unavailable_status(id);
+        }
+
+        UiEffect::None
+    }
+
+    pub(super) fn set_hovered_entry(&mut self, id: ExpressionId) -> UiEffect {
+        self.hovered_entry = Some(id);
+        UiEffect::None
+    }
+
+    pub(super) fn clear_hovered_entry(&mut self, id: ExpressionId) -> UiEffect {
+        if self.hovered_entry == Some(id) {
+            self.hovered_entry = None;
+        }
+
+        UiEffect::None
+    }
+
+    pub(super) fn select_hovered_entry(&mut self) -> UiEffect {
+        if let Some(id) = self.hovered_entry {
+            self.select_entry(id)
+        } else {
+            UiEffect::None
+        }
+    }
+
+    pub(super) fn handle_keyboard_event(&mut self, event: keyboard::Event) -> UiEffect {
+        match event {
+            keyboard::Event::KeyPressed {
+                key: Key::Named(key::Named::ArrowUp),
+                ..
+            } => self.move_selection(SelectionDirection::Previous),
+            keyboard::Event::KeyPressed {
+                key: Key::Named(key::Named::ArrowDown),
+                ..
+            } => self.move_selection(SelectionDirection::Next),
+            keyboard::Event::KeyPressed {
+                key: Key::Named(key::Named::Delete),
+                ..
+            } => self.delete_selected_entry(),
+            _ => {}
+        }
+
+        UiEffect::None
+    }
+
+    pub(super) fn clear(&mut self) -> UiEffect {
+        self.engine = dagcal_core::Engine::new();
+        self.entries.clear();
+        self.input.clear();
+        self.editing = None;
+        self.draft_entry = None;
+        self.selected = None;
+        self.hovered_entry = None;
+        self.status = "Cleared".to_string();
+        UiEffect::None
+    }
+
+    pub(super) fn selection_navigation_enabled(&self) -> bool {
+        (self.editing.is_none() && self.input.source().is_empty())
+            || (self.editing.is_some() && self.input.is_loaded_selection())
+    }
+
+    pub(super) fn scroll_entries_to_selection(&self) -> Task<Message> {
+        let Some(selected) = self.selected else {
+            return Task::none();
+        };
+
+        let Some(index) = self.entries.iter().position(|entry| entry.id == selected) else {
+            return Task::none();
+        };
+
+        let y = if self.entries.len() <= 1 {
+            0.0
+        } else {
+            index as f32 / (self.entries.len() - 1) as f32
+        };
+
+        iced::widget::operation::snap_to(
+            ENTRIES_SCROLLABLE_ID,
+            iced::widget::operation::RelativeOffset { x: 0.0, y },
+        )
+    }
+
+    fn load_edit_entry(&mut self, id: ExpressionId, status: SelectionStatus) -> bool {
+        match self.engine.entry_by_id(id) {
+            Some(entry) => {
+                self.draft_entry = None;
+                self.input.load_selection(entry_expression_source(&entry));
+                self.editing = Some(id);
+                self.selected = Some(id);
+                if let SelectionStatus::Set(status) = status {
+                    self.status = status;
+                }
+                true
+            }
+            None => {
+                if !matches!(status, SelectionStatus::Keep) {
+                    self.status = unavailable_status(id);
+                }
+                false
+            }
+        }
+    }
+
+    fn delete_selected_entry(&mut self) {
+        let Some(id) = self.selected else {
+            return;
+        };
+        self.delete_entry(id);
+    }
+
+    pub(super) fn move_selection(&mut self, direction: SelectionDirection) {
+        if !self.selection_navigation_enabled() || self.entries.is_empty() {
+            return;
+        }
+
+        let next_index = match self
+            .selected
+            .and_then(|id| self.entries.iter().position(|entry| entry.id == id))
+        {
+            Some(index) => match direction {
+                SelectionDirection::Previous => index.saturating_sub(1),
+                SelectionDirection::Next => (index + 1).min(self.entries.len() - 1),
+            },
+            None => match direction {
+                SelectionDirection::Previous => self.entries.len() - 1,
+                SelectionDirection::Next => 0,
+            },
+        };
+
+        self.set_selected_entry(self.entries[next_index].id);
+    }
+
+    fn set_selected_entry(&mut self, id: ExpressionId) {
+        let changed = self.selected != Some(id);
+        self.selected = Some(id);
+
+        if changed && self.editing.is_some() {
+            self.editing = None;
+            self.input.clear();
+            self.status = "Edit cancelled".to_string();
+        }
+    }
+
+    fn ensure_empty_draft_entry(&mut self) -> bool {
+        if self.editing.is_some() {
+            return false;
+        }
+
+        if self
+            .draft_entry
+            .is_some_and(|id| self.engine.entry_by_id(id).is_some())
+        {
+            return false;
+        }
+
+        let (id, should_scroll) = if let Some(id) = self.find_empty_entry_id() {
+            (id, true)
+        } else {
+            let execution = self.engine.execute("");
+            self.refresh_affected(&execution.affected_ids);
+            (execution.id, true)
+        };
+
+        self.draft_entry = Some(id);
+        self.selected = Some(id);
+        should_scroll
+    }
+
+    fn find_empty_entry_id(&self) -> Option<ExpressionId> {
+        self.entries
+            .iter()
+            .find(|entry| entry.source.trim().is_empty())
+            .map(|entry| entry.id)
+    }
+
+    fn save_new_entry_draft(&mut self, id: ExpressionId, source: String) {
+        let result = self.engine.set_statement_by_id(id, source);
+        self.refresh_affected(&result.execution.affected_ids);
+        self.remove_redirected_draft(id, result.execution.id);
+        let id = result.execution.id;
+        self.selected = Some(id);
+        self.status = format!("{id} = {}", state_summary(&result.execution.state));
+        self.editing = None;
+        self.input.clear();
+    }
+
+    fn remove_redirected_draft(&mut self, requested_id: ExpressionId, saved_id: ExpressionId) {
+        if requested_id == saved_id {
+            return;
+        }
+
+        if let Some(removal) = self.engine.remove_entry_by_id(requested_id) {
+            self.entries
+                .retain(|entry| entry.id != removal.removed_entry.id);
+            self.refresh_affected(&removal.affected_ids);
+        }
+
+        if self.draft_entry == Some(requested_id) {
+            self.draft_entry = Some(saved_id);
+        }
+    }
+
+    fn refresh_affected(&mut self, ids: &BTreeSet<ExpressionId>) {
+        for id in ids {
+            match self.engine.entry_by_id(*id) {
+                Some(entry) => self.upsert_cached_entry(entry),
+                None => self.entries.retain(|entry| entry.id != *id),
+            }
+        }
+    }
+
+    fn upsert_cached_entry(&mut self, entry: EntryView) {
+        match self
+            .entries
+            .binary_search_by_key(&entry.id, |entry| entry.id)
+        {
+            Ok(index) => self.entries[index] = entry,
+            Err(index) => self.entries.insert(index, entry),
+        }
+    }
+
+    fn entry_status(&self, id: ExpressionId) -> String {
+        match self.engine.entry_by_id(id) {
+            Some(entry) => format!("{id} = {}", state_summary(&entry.state)),
+            None => format!("{id} updated"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum SelectionDirection {
+    Previous,
+    Next,
+}
+
+enum SelectionStatus {
+    Keep,
+    Set(String),
+}
+
+fn unavailable_status(id: ExpressionId) -> String {
+    format!("{id} is not available")
+}
