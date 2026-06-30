@@ -1,5 +1,5 @@
 use super::{GuiApp, Message};
-use iced::{Subscription, Task, event, keyboard, mouse};
+use iced::{Subscription, Task, event, mouse};
 
 pub(crate) const EXPRESSION_INPUT_ID: &str = "expression-input";
 pub(crate) const ENTRIES_SCROLLABLE_ID: &str = "entries-scrollable";
@@ -22,18 +22,26 @@ impl UiEffect {
 }
 
 pub(super) fn subscription(app: &GuiApp) -> Subscription<Message> {
-    let right_clicks = event::listen_with(|event, _status, _window| match event {
+    let right_clicks = event::listen_with(|event, _status, window| match event {
         iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
-            Some(Message::RightClick)
+            Some(Message::RightClick(window))
         }
         _ => None,
     });
+    let window_closes = iced::window::close_requests().map(Message::WindowClosed);
 
-    if app.selection_navigation_enabled() {
-        Subscription::batch([keyboard::listen().map(Message::Keyboard), right_clicks])
+    let input_events = if app.selection_navigation_enabled() {
+        let keyboard_events = event::listen_with(|event, _status, window| match event {
+            iced::Event::Keyboard(event) => Some(Message::Keyboard(window, event)),
+            _ => None,
+        });
+
+        Subscription::batch([keyboard_events, right_clicks])
     } else {
         right_clicks
-    }
+    };
+
+    Subscription::batch([input_events, window_closes])
 }
 
 fn focus_expression_input() -> Task<Message> {

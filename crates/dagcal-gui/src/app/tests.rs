@@ -60,6 +60,20 @@ fn menu_function_inserts_call_template() {
 }
 
 #[test]
+fn help_menu_messages_open_help_window() {
+    let (mut app, _) = GuiApp::new();
+
+    let _ = app.update(Message::ShowAbout);
+    assert!(app.help_window.is_some());
+    assert_eq!(app.help_topic, HelpTopic::About);
+    assert_eq!(app.status, "Opened help");
+
+    let _ = app.update(Message::ShowKeyboardShortcuts);
+    assert_eq!(app.help_topic, HelpTopic::KeyboardShortcuts);
+    assert_eq!(app.status, "Help is already open");
+}
+
+#[test]
 fn selecting_entry_updates_selection_without_entering_edit() {
     let (mut app, _) = GuiApp::new();
     app.input.set("21".to_string());

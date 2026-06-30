@@ -9,7 +9,7 @@ pub(crate) use draft::Draft;
 pub(crate) use effects::{ENTRIES_SCROLLABLE_ID, EXPRESSION_INPUT_ID};
 
 use dagcal_core::{Engine, EntryView, ExpressionId};
-use iced::{Subscription, Task, keyboard};
+use iced::{Size, Subscription, Task, keyboard, window};
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -23,16 +23,23 @@ pub enum Message {
     Select(ExpressionId),
     EntryHovered(ExpressionId),
     EntryUnhovered(ExpressionId),
-    RightClick,
-    Keyboard(keyboard::Event),
+    RightClick(window::Id),
+    Keyboard(window::Id, keyboard::Event),
     Clear,
     Undo,
     Redo,
     InsertConstant(String),
     InsertFunction(String),
+    Quit,
+    ShowAbout,
+    ShowKeyboardShortcuts,
+    WindowClosed(window::Id),
 }
 
 pub struct GuiApp {
+    pub(crate) main_window: Option<window::Id>,
+    pub(crate) help_window: Option<window::Id>,
+    pub(crate) help_topic: HelpTopic,
     pub(crate) engine: Engine,
     pub(crate) entries: Vec<EntryView>,
     pub(crate) input: Draft,
@@ -43,10 +50,25 @@ pub struct GuiApp {
     pub(crate) status: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HelpTopic {
+    KeyboardShortcuts,
+    About,
+}
+
 impl GuiApp {
     pub(crate) fn new() -> (Self, Task<Message>) {
+        let (main_window, open_main_window) = window::open(window::Settings {
+            size: Size::new(1024.0, 768.0),
+            exit_on_close_request: false,
+            ..window::Settings::default()
+        });
+
         (
             Self {
+                main_window: Some(main_window),
+                help_window: None,
+                help_topic: HelpTopic::KeyboardShortcuts,
                 engine: Engine::new(),
                 entries: Vec::new(),
                 input: Draft::default(),
@@ -56,7 +78,7 @@ impl GuiApp {
                 hovered_entry: None,
                 status: "Ready".to_string(),
             },
-            Task::none(),
+            open_main_window.discard(),
         )
     }
 
@@ -72,18 +94,67 @@ impl GuiApp {
             Message::Select(id) => self.select_entry(id),
             Message::EntryHovered(id) => self.set_hovered_entry(id),
             Message::EntryUnhovered(id) => self.clear_hovered_entry(id),
-            Message::RightClick => self.select_hovered_entry(),
-            Message::Keyboard(event) => self.handle_keyboard_event(event),
+            Message::RightClick(window) if self.main_window == Some(window) => {
+                self.select_hovered_entry()
+            }
+            Message::RightClick(_) => effects::UiEffect::None,
+            Message::Keyboard(window, event) if self.main_window == Some(window) => {
+                self.handle_keyboard_event(event)
+            }
+            Message::Keyboard(_, _) => effects::UiEffect::None,
             Message::Clear => self.clear(),
             Message::Undo => self.undo(),
             Message::Redo => self.redo(),
             Message::InsertConstant(name) => self.insert_constant(name),
             Message::InsertFunction(name) => self.insert_function(name),
+            Message::Quit => return iced::exit(),
+            Message::ShowAbout => return self.open_help_window(HelpTopic::About),
+            Message::ShowKeyboardShortcuts => {
+                return self.open_help_window(HelpTopic::KeyboardShortcuts);
+            }
+            Message::WindowClosed(id) => return self.window_closed(id),
         }
         .into_task(self)
     }
 
     pub(crate) fn subscription(&self) -> Subscription<Message> {
         effects::subscription(self)
+    }
+}
+
+impl GuiApp {
+    fn open_help_window(&mut self, topic: HelpTopic) -> Task<Message> {
+        self.help_topic = topic;
+
+        if self.help_window.is_some() {
+            self.status = "Help is already open".to_string();
+            return Task::none();
+        }
+
+        let (id, open_window) = window::open(window::Settings {
+            size: Size::new(520.0, 420.0),
+            min_size: Some(Size::new(420.0, 320.0)),
+            exit_on_close_request: false,
+            ..window::Settings::default()
+        });
+
+        self.help_window = Some(id);
+        self.status = "Opened help".to_string();
+
+        open_window.discard()
+    }
+
+    fn window_closed(&mut self, id: window::Id) -> Task<Message> {
+        if self.help_window == Some(id) {
+            self.help_window = None;
+            return window::close(id);
+        }
+
+        if self.main_window == Some(id) {
+            self.main_window = None;
+            return iced::exit();
+        }
+
+        Task::none()
     }
 }
