@@ -907,7 +907,7 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "dagcal-core"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "criterion",
  "num-bigint",
@@ -934,14 +934,14 @@ dependencies = [
 
 [[package]]
 name = "dagcal-repl"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "dagcal-core",
 ]
 
 [[package]]
 name = "dagcal-tui"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "crossterm",
  "dagcal-core",
