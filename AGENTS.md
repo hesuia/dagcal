@@ -22,5 +22,7 @@ Add unit tests next to implementation for internal behavior. Add or extend integ
 ## Commit & Pull Request Guidelines
 Recent commit subjects use short imperative phrases such as `Add README` and `Split frontends into crates`. Keep commits focused and use the same style. Pull requests should describe user-visible behavior, mention parser or engine invariants affected, and list verification commands run. Include REPL examples when expression syntax or runtime behavior changes.
 
+If you make any changes, update the `CHANGELOG.md` with a short summary of user-visible behavior changes, and add a `CHANGELOG.md` entry for any new public API. 
+
 ## Architecture Notes
 The core library models expressions as a dependency graph with stable `$n` result IDs and optional user-defined names. Preserve ID stability when editing persistence, entry removal, or recomputation. Internal engine state, stores, resolvers, dependency graph code, and recomputation logic should use `ExpressionId` as the canonical identifier. Convenience APIs may accept names or `$n` strings, but should resolve to `ExpressionId` immediately and delegate to ID-specific methods.
