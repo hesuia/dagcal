@@ -1,10 +1,11 @@
 use super::effects::{ENTRIES_SCROLLABLE_ID, UiEffect};
-use super::{GuiApp, Message};
+use super::{GuiApp, LoadResult, Message, SaveResult};
 use crate::formatting::{entry_expression_source, entry_reference_token, state_summary};
-use dagcal_core::{EntryView, ExpressionId};
+use dagcal_core::{Engine, EngineSnapshot, EntryView, ExpressionId};
 use iced::Task;
 use iced::keyboard::{self, Key, key};
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 impl GuiApp {
     pub(super) fn input_changed(&mut self, value: String) -> UiEffect {
@@ -193,6 +194,51 @@ impl GuiApp {
         self.selected = None;
         self.hovered_entry = None;
         self.status = "Cleared".to_string();
+        UiEffect::None
+    }
+
+    pub(super) fn save(&mut self) -> Task<Message> {
+        let snapshot = self.engine.snapshot();
+        self.status = "Saving...".to_string();
+
+        Task::perform(save_snapshot(snapshot), Message::SaveFinished)
+    }
+
+    pub(super) fn load(&mut self) -> Task<Message> {
+        self.status = "Loading...".to_string();
+
+        Task::perform(load_snapshot(), Message::LoadFinished)
+    }
+
+    pub(super) fn finish_save(&mut self, result: SaveResult) -> UiEffect {
+        self.status = match result {
+            SaveResult::Cancelled => "Save cancelled".to_string(),
+            SaveResult::Saved(path) => format!("Saved {}", display_path(&path)),
+            SaveResult::Failed(error) => format!("Save failed: {error}"),
+        };
+
+        UiEffect::None
+    }
+
+    pub(super) fn finish_load(&mut self, result: LoadResult) -> UiEffect {
+        match result {
+            LoadResult::Cancelled => {
+                self.status = "Load cancelled".to_string();
+            }
+            LoadResult::Loaded(path, snapshot) => match Engine::from_snapshot(snapshot) {
+                Ok(engine) => {
+                    self.engine = engine;
+                    self.reset_after_load(&format!("Loaded {}", display_path(&path)));
+                }
+                Err(error) => {
+                    self.status = format!("Load failed: could not restore snapshot ({error})");
+                }
+            },
+            LoadResult::Failed(error) => {
+                self.status = format!("Load failed: {error}");
+            }
+        }
+
         UiEffect::None
     }
 
@@ -400,6 +446,16 @@ impl GuiApp {
             .or_else(|| self.entries.last().map(|entry| entry.id));
         self.status = status.to_string();
     }
+
+    fn reset_after_load(&mut self, status: &str) {
+        self.entries = self.engine.entries();
+        self.input.clear();
+        self.editing = None;
+        self.draft_entry = None;
+        self.hovered_entry = None;
+        self.selected = self.entries.last().map(|entry| entry.id);
+        self.status = status.to_string();
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -419,4 +475,56 @@ fn unavailable_status(id: ExpressionId) -> String {
 
 fn is_character_key(key: &Key, expected: &str) -> bool {
     matches!(key, Key::Character(value) if value.eq_ignore_ascii_case(expected))
+}
+
+async fn save_snapshot(snapshot: EngineSnapshot) -> SaveResult {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Dagcal session", &["json"])
+        .set_file_name("dagcal-session.json")
+        .save_file()
+    else {
+        return SaveResult::Cancelled;
+    };
+
+    let json = match serde_json::to_string_pretty(&snapshot) {
+        Ok(json) => json,
+        Err(error) => return SaveResult::Failed(format!("could not encode JSON ({error})")),
+    };
+
+    match std::fs::write(&path, json) {
+        Ok(()) => SaveResult::Saved(path),
+        Err(error) => SaveResult::Failed(format!("could not write file ({error})")),
+    }
+}
+
+async fn load_snapshot() -> LoadResult {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Dagcal session", &["json"])
+        .pick_file()
+    else {
+        return LoadResult::Cancelled;
+    };
+
+    load_snapshot_from_path(path)
+}
+
+fn load_snapshot_from_path(path: PathBuf) -> LoadResult {
+    let json = match std::fs::read_to_string(&path) {
+        Ok(json) => json,
+        Err(error) => return LoadResult::Failed(format!("could not read file ({error})")),
+    };
+
+    let snapshot = match serde_json::from_str(&json) {
+        Ok(snapshot) => snapshot,
+        Err(error) => return LoadResult::Failed(format!("could not parse JSON ({error})")),
+    };
+
+    LoadResult::Loaded(path, snapshot)
+}
+
+fn display_path(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| path.display().to_string())
 }

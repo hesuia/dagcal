@@ -40,10 +40,14 @@ impl GuiApp {
 }
 
 fn file_menu() -> Menu<'static, Message, iced::Theme, iced::Renderer> {
-    Menu::new(vec![Item::new(menu_item("Quit", Message::Quit))])
-        .width(Length::Fixed(150.0))
-        .max_width(180.0)
-        .offset(3.0)
+    Menu::new(vec![
+        Item::new(menu_item("Save...", Message::Save)),
+        Item::new(menu_item("Load...", Message::Load)),
+        Item::new(menu_item("Quit", Message::Quit)),
+    ])
+    .width(Length::Fixed(150.0))
+    .max_width(180.0)
+    .offset(3.0)
 }
 
 fn edit_menu() -> Menu<'static, Message, iced::Theme, iced::Renderer> {

@@ -1,7 +1,8 @@
 use super::actions::SelectionDirection;
 use super::*;
-use dagcal_core::{EntryState, ExpressionId, Number};
+use dagcal_core::{EngineSnapshot, EntryState, ExpressionId, Number, PersistedEntry};
 use iced::keyboard::{self, Key, key};
+use std::path::PathBuf;
 
 #[test]
 fn draft_inserts_result_reference_without_replacing_saved_source() {
@@ -403,6 +404,90 @@ fn keyboard_shortcuts_trigger_undo_and_redo() {
     assert_eq!(app.entries.len(), 1);
     assert_eq!(app.entries[0].state, EntryState::Value(Number::from(10)));
     assert_eq!(app.status, "Redone");
+}
+
+#[test]
+fn load_result_replaces_entries_and_resets_edit_state() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    app.start_edit(ExpressionId::new(1));
+    app.hovered_entry = Some(ExpressionId::new(1));
+    app.draft_entry = Some(ExpressionId::new(3));
+
+    let mut loaded = dagcal_core::Engine::new();
+    loaded.execute("x = 2");
+    loaded.execute("x + 3");
+
+    app.finish_load(LoadResult::Loaded(
+        PathBuf::from("session.json"),
+        loaded.snapshot(),
+    ));
+
+    assert_eq!(app.entries.len(), 2);
+    assert_eq!(app.entries[0].name.as_deref(), Some("x"));
+    assert_eq!(app.entries[1].state, EntryState::Value(Number::from(5)));
+    assert_eq!(app.selected, Some(ExpressionId::new(2)));
+    assert_eq!(app.editing, None);
+    assert_eq!(app.draft_entry, None);
+    assert_eq!(app.hovered_entry, None);
+    assert_eq!(app.input.source(), "");
+    assert_eq!(app.status, "Loaded session.json");
+
+    app.undo();
+    assert_eq!(app.status, "Nothing to undo");
+    assert_eq!(app.entries.len(), 2);
+}
+
+#[test]
+fn load_failure_preserves_current_entries() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    let before = app.engine.snapshot();
+
+    app.finish_load(LoadResult::Failed("could not parse JSON (bad)".to_string()));
+
+    assert_eq!(app.engine.snapshot(), before);
+    assert_eq!(app.entries.len(), 1);
+    assert_eq!(app.status, "Load failed: could not parse JSON (bad)");
+}
+
+#[test]
+fn save_and_load_cancel_leave_state_unchanged() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    let before = app.engine.snapshot();
+
+    app.finish_save(SaveResult::Cancelled);
+    assert_eq!(app.engine.snapshot(), before);
+    assert_eq!(app.status, "Save cancelled");
+
+    app.finish_load(LoadResult::Cancelled);
+    assert_eq!(app.engine.snapshot(), before);
+    assert_eq!(app.status, "Load cancelled");
+}
+
+#[test]
+fn invalid_loaded_snapshot_is_reported_without_mutating_app() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    let before = app.engine.snapshot();
+
+    let invalid = EngineSnapshot::new(vec![PersistedEntry {
+        id: 0,
+        name: None,
+        source: "1".to_string(),
+    }]);
+    app.finish_load(LoadResult::Loaded(PathBuf::from("invalid.json"), invalid));
+
+    assert_eq!(app.engine.snapshot(), before);
+    assert!(
+        app.status
+            .starts_with("Load failed: could not restore snapshot")
+    );
 }
 
 #[test]

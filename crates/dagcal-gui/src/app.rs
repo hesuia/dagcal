@@ -8,8 +8,9 @@ mod tests;
 pub(crate) use draft::Draft;
 pub(crate) use effects::{ENTRIES_SCROLLABLE_ID, EXPRESSION_INPUT_ID};
 
-use dagcal_core::{Engine, EntryView, ExpressionId};
+use dagcal_core::{Engine, EngineSnapshot, EntryView, ExpressionId};
 use iced::{Size, Subscription, Task, keyboard, window};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -26,6 +27,10 @@ pub enum Message {
     RightClick(window::Id),
     Keyboard(window::Id, keyboard::Event),
     Clear,
+    Save,
+    Load,
+    SaveFinished(SaveResult),
+    LoadFinished(LoadResult),
     Undo,
     Redo,
     InsertConstant(String),
@@ -34,6 +39,20 @@ pub enum Message {
     ShowAbout,
     ShowKeyboardShortcuts,
     WindowClosed(window::Id),
+}
+
+#[derive(Debug, Clone)]
+pub enum SaveResult {
+    Cancelled,
+    Saved(PathBuf),
+    Failed(String),
+}
+
+#[derive(Debug, Clone)]
+pub enum LoadResult {
+    Cancelled,
+    Loaded(PathBuf, EngineSnapshot),
+    Failed(String),
 }
 
 pub struct GuiApp {
@@ -103,6 +122,10 @@ impl GuiApp {
             }
             Message::Keyboard(_, _) => effects::UiEffect::None,
             Message::Clear => self.clear(),
+            Message::Save => return self.save(),
+            Message::Load => return self.load(),
+            Message::SaveFinished(result) => self.finish_save(result),
+            Message::LoadFinished(result) => self.finish_load(result),
             Message::Undo => self.undo(),
             Message::Redo => self.redo(),
             Message::InsertConstant(name) => self.insert_constant(name),
