@@ -54,6 +54,7 @@ fn edit_menu() -> Menu<'static, Message, iced::Theme, iced::Renderer> {
     Menu::new(vec![
         Item::new(menu_item("Undo", Message::Undo)),
         Item::new(menu_item("Redo", Message::Redo)),
+        Item::new(menu_item("Recalculate All", Message::RecalculateAll)),
         Item::new(menu_item("Clear", Message::Clear)),
     ])
     .width(Length::Fixed(150.0))

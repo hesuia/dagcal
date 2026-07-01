@@ -692,6 +692,31 @@ impl Engine {
         self.session.affected_by(id)
     }
 
+    /// Recomputes one stored entry and its transitive dependents.
+    ///
+    /// Returns the recomputed IDs when `id` exists. This only refreshes derived
+    /// entry states; it does not change source text or undo/redo history.
+    pub fn recompute_entry_by_id(&mut self, id: ExpressionId) -> Option<BTreeSet<ExpressionId>> {
+        self.session.entries.record(id)?;
+        self.recompile_entries([id]);
+        self.session.rebuild_dependencies();
+        let affected = self.session.affected_by(id);
+        self.session.recompute_ids(affected.clone());
+        Some(affected)
+    }
+
+    /// Recomputes every stored entry and returns the recomputed IDs.
+    ///
+    /// This only refreshes derived entry states; it does not change source text
+    /// or undo/redo history.
+    pub fn recompute_all(&mut self) -> BTreeSet<ExpressionId> {
+        let ids: BTreeSet<ExpressionId> = self.session.entries.ids().collect();
+        self.recompile_entries(ids.iter().copied());
+        self.session.rebuild_dependencies();
+        self.session.recompute_ids(ids.clone());
+        ids
+    }
+
     /// Parses and resolves a source expression without storing or evaluating it.
     pub fn preview_expression(&self, source: &str) -> ExpressionPreview {
         let source = source.to_string();
@@ -778,6 +803,29 @@ impl Engine {
         let roots = self.session.compiled.ids_referencing_function(name);
         let affected = self.session.affected_by_any(roots);
         self.session.recompute_ids(affected);
+    }
+
+    fn recompile_entries(&mut self, ids: impl IntoIterator<Item = ExpressionId>) {
+        let sources = ids
+            .into_iter()
+            .filter_map(|id| {
+                self.session
+                    .entries
+                    .record(id)
+                    .map(|record| (id, record.source.clone()))
+            })
+            .collect::<Vec<_>>();
+
+        for (id, source) in sources {
+            let compiled = match parse_expression(&source) {
+                Ok(ast) => match self.session.resolve_expr(ast) {
+                    Ok(ast) => CompiledEntry::from_resolved(ast),
+                    Err(err) => CompiledEntry::from_error(DagcalError::Eval(err)),
+                },
+                Err(err) => CompiledEntry::from_error(err),
+            };
+            self.session.compiled.insert(id, compiled);
+        }
     }
 
     fn save_parsed_entry(
@@ -1026,6 +1074,62 @@ mod tests {
         set_entry(&mut engine, "a", "10").unwrap();
         assert_value(&engine, "b", 20.0);
         assert_value(&engine, "c", 21.0);
+    }
+
+    #[test]
+    fn recompute_entry_by_id_refreshes_target_and_dependents() {
+        let mut engine = Engine::new();
+
+        engine.execute("x + 1");
+        engine.execute("$1 * 2");
+        assert_eval_error(
+            &engine,
+            "$1",
+            |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Name(name)) if name == "x"),
+        );
+
+        engine.execute("x = 3");
+        let affected = engine
+            .recompute_entry_by_id(ExpressionId::new(1))
+            .expect("entry should exist");
+
+        assert_eq!(
+            affected,
+            BTreeSet::from([ExpressionId::new(1), ExpressionId::new(2)])
+        );
+        assert_value(&engine, "$1", 4.0);
+        assert_value(&engine, "$2", 8.0);
+    }
+
+    #[test]
+    fn recompute_entry_by_id_returns_none_for_missing_entry() {
+        let mut engine = Engine::new();
+
+        assert_eq!(engine.recompute_entry_by_id(ExpressionId::new(42)), None);
+    }
+
+    #[test]
+    fn recompute_all_refreshes_every_stored_entry() {
+        let mut engine = Engine::new();
+
+        engine.execute("left + 1");
+        engine.execute("right + 2");
+        engine.execute("left = 10");
+        engine.execute("right = 20");
+
+        let recomputed = engine.recompute_all();
+
+        assert_eq!(
+            recomputed,
+            BTreeSet::from([
+                ExpressionId::new(1),
+                ExpressionId::new(2),
+                ExpressionId::new(3),
+                ExpressionId::new(4)
+            ])
+        );
+        assert_value(&engine, "$1", 11.0);
+        assert_value(&engine, "$2", 22.0);
     }
 
     #[test]

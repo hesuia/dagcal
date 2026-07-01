@@ -6,6 +6,11 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- GUI: Added per-entry recalculation to the right-click menu and a menu-bar action to recalculate all entries.
+- Core: Added public APIs for manually recomputing one entry or all stored entries.
+- Core: Manual recomputation now reparses and resolves stored source so expressions can recover after referenced names are defined later.
+
 ### Fixed
 - GUI: Suppressed the extra console window when running Windows release builds.
 

@@ -87,6 +87,7 @@ fn entry_context_menu(id: ExpressionId) -> Element<'static, Message> {
     container(
         column![
             context_menu_item("Edit", Message::Edit(id)),
+            context_menu_item("Recalculate", Message::Recalculate(id)),
             context_menu_item("Delete", Message::Delete(id)),
         ]
         .spacing(3),

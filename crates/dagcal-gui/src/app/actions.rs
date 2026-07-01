@@ -95,6 +95,24 @@ impl GuiApp {
         UiEffect::None
     }
 
+    pub(super) fn recalculate_entry(&mut self, id: ExpressionId) -> UiEffect {
+        if let Some(affected) = self.engine.recompute_entry_by_id(id) {
+            self.refresh_affected(&affected);
+            self.status = format!("Recalculated {id}");
+        } else {
+            self.status = unavailable_status(id);
+        }
+
+        UiEffect::None
+    }
+
+    pub(super) fn recalculate_all(&mut self) -> UiEffect {
+        self.engine.recompute_all();
+        self.entries = self.engine.entries();
+        self.status = "Recalculated all entries".to_string();
+        UiEffect::None
+    }
+
     pub(super) fn insert_reference(&mut self, id: ExpressionId) -> UiEffect {
         let token = self
             .entries

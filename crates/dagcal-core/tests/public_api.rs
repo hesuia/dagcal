@@ -570,6 +570,31 @@ fn public_api_exposes_dependency_queries_by_expression_id() {
 }
 
 #[test]
+fn public_api_manual_recompute_resolves_names_defined_later() {
+    let mut engine = Engine::new();
+
+    let expression = engine.execute("x + 1");
+    let dependent = engine.execute("$1 * 2");
+    assert_eval_error(
+        &engine,
+        expression.id,
+        |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Name(name)) if name == "x"),
+    );
+
+    engine.execute("x = 3");
+    let affected = engine
+        .recompute_entry_by_id(expression.id)
+        .expect("entry should exist");
+
+    assert_eq!(
+        affected,
+        [expression.id, dependent.id].into_iter().collect()
+    );
+    assert_value(&engine, expression.id, 4.0);
+    assert_value(&engine, dependent.id, 8.0);
+}
+
+#[test]
 fn public_api_previews_expressions_without_mutating_engine_state() {
     let mut engine = Engine::new();
 

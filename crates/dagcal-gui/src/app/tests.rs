@@ -276,6 +276,57 @@ fn submit_edit_recomputes_dependents() {
 }
 
 #[test]
+fn recalculate_entry_refreshes_cached_target_and_dependents() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("x + 1".to_string());
+    app.submit_input();
+    app.input.set("$1 * 2".to_string());
+    app.submit_input();
+
+    app.input.set("x = 3".to_string());
+    app.submit_input();
+    app.recalculate_entry(ExpressionId::new(1));
+
+    assert_eq!(app.entries[0].state, EntryState::Value(Number::from(4)));
+    assert_eq!(app.entries[1].state, EntryState::Value(Number::from(8)));
+    assert_eq!(app.editing, None);
+    assert_eq!(app.input.source(), "");
+    assert_eq!(app.status, "Recalculated $1");
+}
+
+#[test]
+fn recalculate_missing_entry_reports_unavailable_status() {
+    let (mut app, _) = GuiApp::new();
+
+    app.recalculate_entry(ExpressionId::new(99));
+
+    assert_eq!(app.status, "$99 is not available");
+}
+
+#[test]
+fn recalculate_all_refreshes_all_cached_entries() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("left + 1".to_string());
+    app.submit_input();
+    app.input.set("right + 2".to_string());
+    app.submit_input();
+    app.input.set("left = 10".to_string());
+    app.submit_input();
+    app.input.set("right = 20".to_string());
+    app.submit_input();
+    app.selected = Some(ExpressionId::new(1));
+
+    app.recalculate_all();
+
+    assert_eq!(app.entries[0].state, EntryState::Value(Number::from(11)));
+    assert_eq!(app.entries[1].state, EntryState::Value(Number::from(22)));
+    assert_eq!(app.selected, Some(ExpressionId::new(1)));
+    assert_eq!(app.editing, None);
+    assert_eq!(app.input.source(), "");
+    assert_eq!(app.status, "Recalculated all entries");
+}
+
+#[test]
 fn submit_after_start_edit_updates_existing_entry() {
     let (mut app, _) = GuiApp::new();
     app.input.set("10".to_string());
