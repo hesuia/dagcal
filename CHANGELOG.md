@@ -6,8 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
-### Added
-- Nothing yet.
+### Fixed
+- GUI: Suppressed the extra console window when running Windows release builds.
 
 ## [0.2.1] - 2026-07-01
 
