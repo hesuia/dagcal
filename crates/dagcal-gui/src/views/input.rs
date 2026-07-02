@@ -26,7 +26,7 @@ impl GuiApp {
             .size(18);
         let input = DropDown::new(input, self.completion_view(), self.completion_is_open())
             .width(Length::Fill)
-            .alignment(drop_down::Alignment::BottomStart)
+            .alignment(drop_down::Alignment::Bottom)
             .offset(drop_down::Offset { x: 0.0, y: 4.0 })
             .on_dismiss(Message::DismissCompletion);
 
