@@ -214,6 +214,8 @@ impl Session {
 /// ```
 pub struct Engine {
     session: Session,
+    undo_stack: Vec<EngineSnapshot>,
+    redo_stack: Vec<EngineSnapshot>,
 }
 
 impl Default for Engine {
@@ -231,6 +233,8 @@ impl Engine {
     pub fn new() -> Self {
         Self {
             session: Session::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -264,7 +268,7 @@ impl Engine {
     /// returned engine is exposed.
     pub fn from_snapshot(snapshot: EngineSnapshot) -> Result<Self, DagcalError> {
         let mut engine = Self::new();
-        engine.restore_snapshot(snapshot)?;
+        engine.restore_snapshot_untracked(snapshot)?;
         Ok(engine)
     }
 
@@ -281,13 +285,19 @@ impl Engine {
     /// Values and errors are recomputed from source text after the dependency
     /// graph is rebuilt.
     pub fn restore_snapshot(&mut self, snapshot: EngineSnapshot) -> Result<(), DagcalError> {
+        let previous = self.snapshot();
+        self.restore_snapshot_untracked(snapshot)?;
+        self.record_undo(previous);
+        Ok(())
+    }
+
+    fn restore_snapshot_untracked(&mut self, snapshot: EngineSnapshot) -> Result<(), DagcalError> {
         let entries = validate_snapshot(snapshot)?;
-        let mut restored = Self::new();
+        let mut restored_entries = EntryRepository::new();
+        let mut restored_compiled = CompiledEntryStore::new();
 
         for entry in &entries {
-            restored
-                .session
-                .entries
+            restored_entries
                 .reserve_restored_entry(ExpressionId::new(entry.id), entry.name.as_deref());
         }
 
@@ -295,22 +305,86 @@ impl Engine {
             let id = ExpressionId::new(entry.id);
             let record = EntryRecord::new(id, entry.name, entry.source.clone());
             let compiled = match parse_expression(&entry.source) {
-                Ok(ast) => match restored.session.resolve_expr(ast) {
+                Ok(ast) => match resolve_expr(
+                    &SymbolTable::new(&restored_entries, &self.session.runtime),
+                    ast,
+                ) {
                     Ok(ast) => CompiledEntry::from_resolved(ast),
                     Err(err) => CompiledEntry::from_error(DagcalError::Eval(err)),
                 },
                 Err(err) => CompiledEntry::from_error(err),
             };
-            restored.session.entries.upsert(record);
-            restored.session.compiled.insert(id, compiled);
+            restored_entries.upsert(record);
+            restored_compiled.insert(id, compiled);
         }
 
-        restored.session.rebuild_dependencies();
-        let ids = restored.session.entries.ids().collect();
-        restored.session.recompute_ids(ids);
+        self.session.entries = restored_entries;
+        self.session.compiled = restored_compiled;
+        self.session.dependencies = DependencyIndex::new();
+        self.session.results = ResultCache::new();
+        self.session.rebuild_dependencies();
+        let ids = self.session.entries.ids().collect();
+        self.session.recompute_ids(ids);
 
-        *self = restored;
         Ok(())
+    }
+
+    /// Returns `true` when an undo operation is currently available.
+    pub fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    /// Returns `true` when a redo operation is currently available.
+    pub fn can_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+
+    /// Restores the entry state before the most recent successful mutation.
+    ///
+    /// Undo/redo history tracks stored entries, stable IDs, names, source text,
+    /// dependencies, and recomputed entry states. Runtime constants and
+    /// functions are not snapshotted and remain configured on this engine.
+    pub fn undo(&mut self) -> bool {
+        let Some(previous) = self.undo_stack.pop() else {
+            return false;
+        };
+
+        let current = self.snapshot();
+        self.restore_snapshot_untracked(previous)
+            .expect("undo history should contain valid snapshots");
+        self.redo_stack.push(current);
+        true
+    }
+
+    /// Reapplies the most recently undone entry mutation.
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.redo_stack.pop() else {
+            return false;
+        };
+
+        let current = self.snapshot();
+        self.restore_snapshot_untracked(next)
+            .expect("redo history should contain valid snapshots");
+        self.undo_stack.push(current);
+        true
+    }
+
+    /// Removes all stored entries while preserving runtime constants and functions.
+    pub fn clear(&mut self) {
+        if self.entry_count() == 0 {
+            return;
+        }
+
+        let previous = self.snapshot();
+        self.restore_snapshot_untracked(EngineSnapshot::new(Vec::new()))
+            .expect("empty snapshot should be valid");
+        self.record_undo(previous);
+    }
+
+    /// Clears undo and redo history without changing stored entries.
+    pub fn clear_history(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
     }
 
     /// Executes user input as either a named definition (`name = expr`) or a
@@ -324,19 +398,26 @@ impl Engine {
     /// A statement-level parse error is saved as an unnamed error entry so the
     /// original input can be edited later.
     pub fn execute(&mut self, input: &str) -> Execution {
+        let previous = self.snapshot();
         match parse_statement(input) {
             Ok(ParsedStatement::Definition { name, expr }) => {
                 let source = definition_source(input, &name);
                 let (id, name) = self.session.entries.resolve_or_create_name(name);
-                self.save_parsed_entry(id, name, source, expr)
+                let execution = self.save_parsed_entry(id, name, source, expr);
+                self.record_undo(previous);
+                execution
             }
             Ok(ParsedStatement::Expression(expr)) => {
                 let id = self.session.entries.allocate_id();
-                self.save_parsed_entry(id, None, input.trim().to_string(), expr)
+                let execution = self.save_parsed_entry(id, None, input.trim().to_string(), expr);
+                self.record_undo(previous);
+                execution
             }
             Err(err) => {
                 let id = self.session.entries.allocate_id();
-                self.save_parse_error(id, None, input.trim().to_string(), err)
+                let execution = self.save_parse_error(id, None, input.trim().to_string(), err);
+                self.record_undo(previous);
+                execution
             }
         }
     }
@@ -414,8 +495,12 @@ impl Engine {
     where
         T: IntoEntryTarget,
     {
-        let (id, name) = self.resolve_or_create_target(target.into_entry_target()?);
-        Ok(self.set_entry_for_id(id, name, source))
+        let target = target.into_entry_target()?;
+        let previous = self.snapshot();
+        let (id, name) = self.resolve_or_create_target(target);
+        let result = self.set_entry_for_id(id, name, source);
+        self.record_undo(previous);
+        Ok(result)
     }
 
     /// Sets or edits an entry by stable expression ID.
@@ -424,9 +509,46 @@ impl Engine {
         id: ExpressionId,
         source: impl Into<String>,
     ) -> SetEntryResult {
+        let previous = self.snapshot();
         let name = self.session.entries.name_for_id(id).cloned();
         self.session.entries.reserve_id(id);
-        self.set_entry_for_id(id, name, source)
+        let result = self.set_entry_for_id(id, name, source);
+        self.record_undo(previous);
+        result
+    }
+
+    /// Sets or edits an entry by stable expression ID using statement syntax.
+    ///
+    /// Plain expressions are saved on `id`. Named definitions (`name = expr`)
+    /// save the right-hand expression and attach `name`; if `name` already
+    /// exists on another entry, that existing named entry is updated instead.
+    pub fn set_statement_by_id(
+        &mut self,
+        id: ExpressionId,
+        input: impl Into<String>,
+    ) -> SetEntryResult {
+        let previous = self.snapshot();
+        let input = input.into();
+        let result = match parse_statement(&input) {
+            Ok(ParsedStatement::Definition { name, expr }) => {
+                let source = definition_source(&input, &name);
+                let target_id = self.session.entries.name_id(&name).unwrap_or(id);
+                self.session.entries.reserve_id(target_id);
+                self.save_parsed_statement_entry(target_id, Some(name), source, expr)
+            }
+            Ok(ParsedStatement::Expression(expr)) => {
+                let name = self.session.entries.name_for_id(id).cloned();
+                self.session.entries.reserve_id(id);
+                self.save_parsed_statement_entry(id, name, input.trim().to_string(), expr)
+            }
+            Err(err) => {
+                let name = self.session.entries.name_for_id(id).cloned();
+                self.session.entries.reserve_id(id);
+                self.save_statement_parse_error(id, name, input.trim().to_string(), err)
+            }
+        };
+        self.record_undo(previous);
+        result
     }
 
     fn set_entry_for_id(
@@ -441,15 +563,27 @@ impl Engine {
             Err(err) => self.save_parse_error(id, name, source, err),
         };
 
-        let target_error = match &execution.state {
-            EntryState::Value(_) => None,
-            EntryState::Error(err) => Some(err.clone()),
-        };
+        set_entry_result_from_execution(execution)
+    }
 
-        SetEntryResult {
-            execution,
-            target_error,
-        }
+    fn save_parsed_statement_entry(
+        &mut self,
+        id: ExpressionId,
+        name: Option<String>,
+        source: String,
+        ast: ParsedExpr,
+    ) -> SetEntryResult {
+        set_entry_result_from_execution(self.save_parsed_entry(id, name, source, ast))
+    }
+
+    fn save_statement_parse_error(
+        &mut self,
+        id: ExpressionId,
+        name: Option<String>,
+        source: String,
+        err: DagcalError,
+    ) -> SetEntryResult {
+        set_entry_result_from_execution(self.save_parse_error(id, name, source, err))
     }
 
     /// Removes an entry by `$n` result reference, name, or stable ID.
@@ -469,6 +603,7 @@ impl Engine {
 
     /// Removes an entry by stable expression ID.
     pub fn remove_entry_by_id(&mut self, id: ExpressionId) -> Option<EntryRemoval> {
+        let previous = self.snapshot();
         let removed_entry = self.session.entry_view(id)?;
         let affected = self.session.affected_by(id);
         self.session.entries.remove(id)?;
@@ -476,6 +611,7 @@ impl Engine {
         self.session.results.remove(id);
         self.session.rebuild_dependencies();
         self.session.recompute_ids(affected.clone());
+        self.record_undo(previous);
         Some(EntryRemoval {
             removed_entry,
             affected_ids: affected,
@@ -556,6 +692,31 @@ impl Engine {
         self.session.affected_by(id)
     }
 
+    /// Recomputes one stored entry and its transitive dependents.
+    ///
+    /// Returns the recomputed IDs when `id` exists. This only refreshes derived
+    /// entry states; it does not change source text or undo/redo history.
+    pub fn recompute_entry_by_id(&mut self, id: ExpressionId) -> Option<BTreeSet<ExpressionId>> {
+        self.session.entries.record(id)?;
+        self.recompile_entries([id]);
+        self.session.rebuild_dependencies();
+        let affected = self.session.affected_by(id);
+        self.session.recompute_ids(affected.clone());
+        Some(affected)
+    }
+
+    /// Recomputes every stored entry and returns the recomputed IDs.
+    ///
+    /// This only refreshes derived entry states; it does not change source text
+    /// or undo/redo history.
+    pub fn recompute_all(&mut self) -> BTreeSet<ExpressionId> {
+        let ids: BTreeSet<ExpressionId> = self.session.entries.ids().collect();
+        self.recompile_entries(ids.iter().copied());
+        self.session.rebuild_dependencies();
+        self.session.recompute_ids(ids.clone());
+        ids
+    }
+
     /// Parses and resolves a source expression without storing or evaluating it.
     pub fn preview_expression(&self, source: &str) -> ExpressionPreview {
         let source = source.to_string();
@@ -617,6 +778,21 @@ impl Engine {
             .map_err(DagcalError::Eval)
     }
 
+    /// Parses and evaluates a user input statement without storing it.
+    ///
+    /// Plain expressions are evaluated as-is. Named definitions evaluate only
+    /// the right-hand expression, matching what would be saved by
+    /// [`Engine::execute`] without allocating an ID or mutating the session.
+    pub fn eval_statement_once(&self, source: &str) -> Result<Number, DagcalError> {
+        let expr = match parse_statement(source)? {
+            ParsedStatement::Expression(expr) => expr,
+            ParsedStatement::Definition { expr, .. } => expr,
+        };
+        let ast = self.session.resolve_expr(expr).map_err(DagcalError::Eval)?;
+        self::recompute::eval_once(&ast, &self.session.runtime, &self.session.results)
+            .map_err(DagcalError::Eval)
+    }
+
     fn recompute_constant_references(&mut self, name: &str) {
         let roots = self.session.compiled.ids_referencing_constant(name);
         let affected = self.session.affected_by_any(roots);
@@ -627,6 +803,29 @@ impl Engine {
         let roots = self.session.compiled.ids_referencing_function(name);
         let affected = self.session.affected_by_any(roots);
         self.session.recompute_ids(affected);
+    }
+
+    fn recompile_entries(&mut self, ids: impl IntoIterator<Item = ExpressionId>) {
+        let sources = ids
+            .into_iter()
+            .filter_map(|id| {
+                self.session
+                    .entries
+                    .record(id)
+                    .map(|record| (id, record.source.clone()))
+            })
+            .collect::<Vec<_>>();
+
+        for (id, source) in sources {
+            let compiled = match parse_expression(&source) {
+                Ok(ast) => match self.session.resolve_expr(ast) {
+                    Ok(ast) => CompiledEntry::from_resolved(ast),
+                    Err(err) => CompiledEntry::from_error(DagcalError::Eval(err)),
+                },
+                Err(err) => CompiledEntry::from_error(err),
+            };
+            self.session.compiled.insert(id, compiled);
+        }
     }
 
     fn save_parsed_entry(
@@ -696,6 +895,15 @@ impl Engine {
             EntryTarget::Name(name) => self.session.entries.name_id(&name),
         }
     }
+
+    fn record_undo(&mut self, previous: EngineSnapshot) {
+        if self.snapshot() == previous {
+            return;
+        }
+
+        self.undo_stack.push(previous);
+        self.redo_stack.clear();
+    }
 }
 
 fn definition_source(input: &str, name: &str) -> String {
@@ -707,6 +915,18 @@ fn definition_source(input: &str, name: &str) -> String {
         right.trim().to_string()
     } else {
         input.trim().to_string()
+    }
+}
+
+fn set_entry_result_from_execution(execution: Execution) -> SetEntryResult {
+    let target_error = match &execution.state {
+        EntryState::Value(_) => None,
+        EntryState::Error(err) => Some(err.clone()),
+    };
+
+    SetEntryResult {
+        execution,
+        target_error,
     }
 }
 
@@ -854,6 +1074,95 @@ mod tests {
         set_entry(&mut engine, "a", "10").unwrap();
         assert_value(&engine, "b", 20.0);
         assert_value(&engine, "c", 21.0);
+    }
+
+    #[test]
+    fn recompute_entry_by_id_refreshes_target_and_dependents() {
+        let mut engine = Engine::new();
+
+        engine.execute("x + 1");
+        engine.execute("$1 * 2");
+        assert_eval_error(
+            &engine,
+            "$1",
+            |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Name(name)) if name == "x"),
+        );
+
+        engine.execute("x = 3");
+        let affected = engine
+            .recompute_entry_by_id(ExpressionId::new(1))
+            .expect("entry should exist");
+
+        assert_eq!(
+            affected,
+            BTreeSet::from([ExpressionId::new(1), ExpressionId::new(2)])
+        );
+        assert_value(&engine, "$1", 4.0);
+        assert_value(&engine, "$2", 8.0);
+    }
+
+    #[test]
+    fn recompute_entry_by_id_returns_none_for_missing_entry() {
+        let mut engine = Engine::new();
+
+        assert_eq!(engine.recompute_entry_by_id(ExpressionId::new(42)), None);
+    }
+
+    #[test]
+    fn recompute_all_refreshes_every_stored_entry() {
+        let mut engine = Engine::new();
+
+        engine.execute("left + 1");
+        engine.execute("right + 2");
+        engine.execute("left = 10");
+        engine.execute("right = 20");
+
+        let recomputed = engine.recompute_all();
+
+        assert_eq!(
+            recomputed,
+            BTreeSet::from([
+                ExpressionId::new(1),
+                ExpressionId::new(2),
+                ExpressionId::new(3),
+                ExpressionId::new(4)
+            ])
+        );
+        assert_value(&engine, "$1", 11.0);
+        assert_value(&engine, "$2", 22.0);
+    }
+
+    #[test]
+    fn eval_statement_once_previews_expressions_and_definitions_without_storing() {
+        let mut engine = Engine::new();
+        engine.execute("base = 10");
+
+        assert_eq!(
+            engine.eval_statement_once("1 + 2").unwrap(),
+            Number::from(3)
+        );
+        assert_eq!(
+            engine.eval_statement_once("x = base * 2").unwrap(),
+            Number::from(20)
+        );
+        assert_eq!(engine.entries().len(), 1);
+        assert!(engine.state("x").is_none());
+    }
+
+    #[test]
+    fn eval_statement_once_reports_statement_parse_and_resolve_errors() {
+        let engine = Engine::new();
+
+        assert!(matches!(
+            engine.eval_statement_once("x ="),
+            Err(DagcalError::Parse(_))
+        ));
+        assert!(matches!(
+            engine.eval_statement_once("x = missing + 1"),
+            Err(DagcalError::Eval(EvalError::UnknownReference(
+                ReferenceTarget::Name(name)
+            ))) if name == "missing"
+        ));
     }
 
     #[test]

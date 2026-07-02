@@ -131,6 +131,60 @@ fn public_api_supports_entry_targets_and_id_specific_methods() {
 }
 
 #[test]
+fn public_api_sets_statement_by_id_as_named_definition() {
+    let mut engine = Engine::new();
+
+    let result = engine.set_statement_by_id(id(1), "x = 2");
+
+    assert!(result.target_error.is_none());
+    assert_eq!(result.execution.id, id(1));
+    let entry = engine.entry_by_id(id(1)).unwrap();
+    assert_eq!(entry.name.as_deref(), Some("x"));
+    assert_eq!(entry.source, "2");
+    assert_value(&engine, id(1), 2.0);
+    assert_eq!(engine.entry("x").unwrap().id, id(1));
+}
+
+#[test]
+fn public_api_set_statement_by_id_renames_without_leaving_old_name() {
+    let mut engine = Engine::new();
+    engine.set_statement_by_id(id(1), "x = 2");
+    engine.execute("x + 1");
+
+    let result = engine.set_statement_by_id(id(1), "y = 3");
+
+    assert!(result.target_error.is_none());
+    assert!(engine.entry("x").is_none());
+    assert_eq!(engine.entry("y").unwrap().id, id(1));
+    assert_value(&engine, id(1), 3.0);
+    assert_value(&engine, id(2), 4.0);
+
+    let stale_name = engine.execute("x + 1");
+    assert_eval_error(
+        &engine,
+        stale_name.id,
+        |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Name(name)) if name == "x"),
+    );
+}
+
+#[test]
+fn public_api_set_statement_by_id_stores_statement_parse_errors_on_target() {
+    let mut engine = Engine::new();
+
+    let result = engine.set_statement_by_id(id(1), "broken = 1 +");
+
+    assert_eq!(result.execution.id, id(1));
+    assert!(result.target_error.is_some());
+    let entry = engine.entry_by_id(id(1)).unwrap();
+    assert_eq!(entry.name, None);
+    assert_eq!(entry.source, "broken = 1 +");
+    assert!(matches!(
+        entry.state,
+        EntryState::Error(DagcalError::Parse(_))
+    ));
+}
+
+#[test]
 fn public_api_reports_invalid_entry_targets_as_structured_parse_errors() {
     let mut engine = Engine::new();
 
@@ -516,6 +570,31 @@ fn public_api_exposes_dependency_queries_by_expression_id() {
 }
 
 #[test]
+fn public_api_manual_recompute_resolves_names_defined_later() {
+    let mut engine = Engine::new();
+
+    let expression = engine.execute("x + 1");
+    let dependent = engine.execute("$1 * 2");
+    assert_eval_error(
+        &engine,
+        expression.id,
+        |err| matches!(err, EvalError::UnknownReference(ReferenceTarget::Name(name)) if name == "x"),
+    );
+
+    engine.execute("x = 3");
+    let affected = engine
+        .recompute_entry_by_id(expression.id)
+        .expect("entry should exist");
+
+    assert_eq!(
+        affected,
+        [expression.id, dependent.id].into_iter().collect()
+    );
+    assert_value(&engine, expression.id, 4.0);
+    assert_value(&engine, dependent.id, 8.0);
+}
+
+#[test]
 fn public_api_previews_expressions_without_mutating_engine_state() {
     let mut engine = Engine::new();
 
@@ -630,6 +709,147 @@ fn public_api_keeps_numbered_results_stable_across_removal_and_append() {
             .is_none()
     );
     assert_value(&engine, third_id, 12.0);
+}
+
+#[test]
+fn public_api_undo_redo_restores_appended_entries_with_stable_ids() {
+    let mut engine = Engine::new();
+
+    let first = engine.execute("10").id;
+    let second = engine.execute("$1 * 2").id;
+    assert_eq!(second, id(2));
+    assert!(engine.can_undo());
+    assert!(!engine.can_redo());
+
+    assert!(engine.undo());
+    assert!(engine.entry_by_id(second).is_none());
+    assert_eq!(
+        engine.state_by_id(first),
+        Some(&EntryState::Value(Number::from(10)))
+    );
+    assert!(engine.can_redo());
+
+    assert!(engine.redo());
+    assert_eq!(
+        engine.state_by_id(second),
+        Some(&EntryState::Value(Number::from(20)))
+    );
+}
+
+#[test]
+fn public_api_undo_restores_edits_and_recomputes_dependents() {
+    let mut engine = Engine::new();
+    let base = engine.execute("base = 10").id;
+    let dependent = engine.execute("base * 2").id;
+
+    engine.set_entry(base, "20").unwrap();
+    assert_eq!(
+        engine.state_by_id(dependent),
+        Some(&EntryState::Value(Number::from(40)))
+    );
+
+    assert!(engine.undo());
+    assert_eq!(
+        engine.state_by_id(base),
+        Some(&EntryState::Value(Number::from(10)))
+    );
+    assert_eq!(
+        engine.state_by_id(dependent),
+        Some(&EntryState::Value(Number::from(20)))
+    );
+}
+
+#[test]
+fn public_api_undo_restores_removed_entries_and_redo_removes_them_again() {
+    let mut engine = Engine::new();
+    let base = engine.execute("base = 10").id;
+    let dependent = engine.execute("base * 2").id;
+
+    engine.remove_entry(base).unwrap();
+    assert!(matches!(
+        engine.state_by_id(dependent),
+        Some(EntryState::Error(_))
+    ));
+
+    assert!(engine.undo());
+    assert_eq!(
+        engine.state_by_id(base),
+        Some(&EntryState::Value(Number::from(10)))
+    );
+    assert_eq!(
+        engine.state_by_id(dependent),
+        Some(&EntryState::Value(Number::from(20)))
+    );
+
+    assert!(engine.redo());
+    assert!(engine.entry_by_id(base).is_none());
+    assert!(matches!(
+        engine.state_by_id(dependent),
+        Some(EntryState::Error(_))
+    ));
+}
+
+#[test]
+fn public_api_new_mutation_after_undo_clears_redo_history() {
+    let mut engine = Engine::new();
+
+    engine.execute("1");
+    engine.execute("2");
+    assert!(engine.undo());
+    assert!(engine.can_redo());
+
+    engine.execute("3");
+    assert!(!engine.can_redo());
+    assert!(!engine.redo());
+    assert_eq!(engine.entry_ids(), vec![id(1), id(2)]);
+    assert_eq!(
+        engine.state_by_id(id(2)),
+        Some(&EntryState::Value(Number::from(3)))
+    );
+}
+
+#[test]
+fn public_api_clear_is_undoable() {
+    let mut engine = Engine::new();
+    engine.execute("1");
+    engine.execute("2");
+
+    engine.clear();
+    assert_eq!(engine.entry_count(), 0);
+
+    assert!(engine.undo());
+    assert_eq!(engine.entry_ids(), vec![id(1), id(2)]);
+}
+
+#[test]
+fn public_api_failed_noop_operations_do_not_create_history_entries() {
+    let mut engine = Engine::new();
+
+    assert!(engine.remove_entry("missing").is_none());
+    assert!(!engine.can_undo());
+
+    assert!(engine.set_entry("$0", "1").is_err());
+    assert!(!engine.can_undo());
+}
+
+#[test]
+fn public_api_runtime_extensions_survive_undo_redo_restores() {
+    let mut engine = Engine::new();
+    engine.register_fixed_function("triple", 1, |args| Ok(args[0].clone() * Number::from(3)));
+    engine.set_constant("tau", Number::from(6));
+
+    let value = engine.execute("triple(2) + tau").id;
+    assert_eq!(
+        engine.state_by_id(value),
+        Some(&EntryState::Value(Number::from(12)))
+    );
+
+    assert!(engine.undo());
+    assert!(engine.redo());
+    assert_eq!(
+        engine.state_by_id(value),
+        Some(&EntryState::Value(Number::from(12)))
+    );
 }
 
 #[test]
