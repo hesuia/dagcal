@@ -41,7 +41,8 @@ impl GuiApp {
 
 fn file_menu() -> Menu<'static, Message, iced::Theme, iced::Renderer> {
     Menu::new(vec![
-        Item::new(menu_item("Save...", Message::Save)),
+        Item::new(menu_item("Save", Message::Save)),
+        Item::new(menu_item("Save As...", Message::SaveAs)),
         Item::new(menu_item("Load...", Message::Load)),
         Item::new(menu_item("Quit", Message::Quit)),
     ])

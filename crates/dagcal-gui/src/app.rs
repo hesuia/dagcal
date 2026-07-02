@@ -32,6 +32,7 @@ pub enum Message {
     Keyboard(window::Id, keyboard::Event),
     Clear,
     Save,
+    SaveAs,
     Load,
     SaveFinished(SaveResult),
     LoadFinished(LoadResult),
@@ -46,12 +47,14 @@ pub enum Message {
     ShowAbout,
     ShowKeyboardShortcuts,
     WindowClosed(window::Id),
+    ConfirmPending,
+    CancelConfirmation,
 }
 
 #[derive(Debug, Clone)]
 pub enum SaveResult {
     Cancelled,
-    Saved(PathBuf),
+    Saved(PathBuf, EngineSnapshot),
     Failed(String),
 }
 
@@ -77,12 +80,24 @@ pub struct GuiApp {
     pub(crate) hovered_entry: Option<ExpressionId>,
     pub(crate) status: String,
     pub(crate) completion: CompletionState,
+    pub(crate) current_path: Option<PathBuf>,
+    pub(crate) saved_snapshot: EngineSnapshot,
+    pub(crate) pending_confirmation: Option<Confirmation>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HelpTopic {
     KeyboardShortcuts,
     About,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Confirmation {
+    Delete(ExpressionId),
+    Clear,
+    Load,
+    Quit,
+    CloseMain(window::Id),
 }
 
 impl GuiApp {
@@ -93,6 +108,9 @@ impl GuiApp {
             ..window::Settings::default()
         });
 
+        let engine = Engine::new();
+        let saved_snapshot = engine.snapshot();
+
         (
             Self {
                 main_window: Some(main_window),
@@ -100,7 +118,7 @@ impl GuiApp {
                 details_window: None,
                 details_target: None,
                 help_topic: HelpTopic::KeyboardShortcuts,
-                engine: Engine::new(),
+                engine,
                 entries: Vec::new(),
                 input: Draft::default(),
                 editing: None,
@@ -109,6 +127,9 @@ impl GuiApp {
                 hovered_entry: None,
                 status: "Ready".to_string(),
                 completion: CompletionState::default(),
+                current_path: None,
+                saved_snapshot,
+                pending_confirmation: None,
             },
             open_main_window.discard(),
         )
@@ -138,6 +159,7 @@ impl GuiApp {
             Message::Keyboard(_, _) => effects::UiEffect::None,
             Message::Clear => self.clear(),
             Message::Save => return self.save(),
+            Message::SaveAs => return self.save_as(),
             Message::Load => return self.load(),
             Message::SaveFinished(result) => self.finish_save(result),
             Message::LoadFinished(result) => self.finish_load(result),
@@ -154,12 +176,14 @@ impl GuiApp {
                 effects::UiEffect::None
             }
             Message::ShowDetails(id) => return self.open_details_window(id),
-            Message::Quit => return iced::exit(),
+            Message::Quit => return self.quit(),
             Message::ShowAbout => return self.open_help_window(HelpTopic::About),
             Message::ShowKeyboardShortcuts => {
                 return self.open_help_window(HelpTopic::KeyboardShortcuts);
             }
             Message::WindowClosed(id) => return self.window_closed(id),
+            Message::ConfirmPending => return self.confirm_pending(),
+            Message::CancelConfirmation => self.cancel_confirmation(),
         }
         .into_task(self)
     }
@@ -225,6 +249,10 @@ impl GuiApp {
         }
 
         if self.main_window == Some(id) {
+            if self.is_dirty() {
+                self.request_confirmation(Confirmation::CloseMain(id));
+                return Task::none();
+            }
             self.main_window = None;
             return iced::exit();
         }

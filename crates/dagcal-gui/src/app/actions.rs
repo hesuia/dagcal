@@ -1,5 +1,5 @@
 use super::effects::{ENTRIES_SCROLLABLE_ID, UiEffect};
-use super::{GuiApp, LoadResult, Message, SaveResult};
+use super::{Confirmation, GuiApp, LoadResult, Message, SaveResult};
 use crate::app::completion::CompletionDirection;
 use crate::formatting::{entry_expression_source, entry_reference_token, state_summary};
 use dagcal_core::{Engine, EngineSnapshot, EntryView, ExpressionId};
@@ -75,6 +75,16 @@ impl GuiApp {
     }
 
     pub(super) fn delete_entry(&mut self, id: ExpressionId) -> UiEffect {
+        if self.engine.entry_by_id(id).is_none() {
+            self.status = unavailable_status(id);
+            return UiEffect::None;
+        }
+
+        self.request_confirmation(Confirmation::Delete(id));
+        UiEffect::None
+    }
+
+    fn perform_delete_entry(&mut self, id: ExpressionId) -> UiEffect {
         if let Some(removal) = self.engine.remove_entry_by_id(id) {
             self.entries
                 .retain(|entry| entry.id != removal.removed_entry.id);
@@ -242,6 +252,15 @@ impl GuiApp {
     }
 
     pub(super) fn clear(&mut self) -> UiEffect {
+        if self.is_dirty() {
+            self.request_confirmation(Confirmation::Clear);
+            return UiEffect::None;
+        }
+
+        self.perform_clear()
+    }
+
+    fn perform_clear(&mut self) -> UiEffect {
         self.engine.clear();
         self.entries = self.engine.entries();
         self.input.clear();
@@ -255,13 +274,40 @@ impl GuiApp {
     }
 
     pub(super) fn save(&mut self) -> Task<Message> {
+        if let Some(path) = self.current_path.clone() {
+            self.save_to_path(path)
+        } else {
+            self.save_as()
+        }
+    }
+
+    pub(super) fn save_as(&mut self) -> Task<Message> {
         let snapshot = self.engine.snapshot();
         self.status = "Saving...".to_string();
 
-        Task::perform(save_snapshot(snapshot), Message::SaveFinished)
+        Task::perform(
+            save_snapshot_with_dialog(snapshot, self.current_path.clone()),
+            Message::SaveFinished,
+        )
+    }
+
+    fn save_to_path(&mut self, path: PathBuf) -> Task<Message> {
+        let snapshot = self.engine.snapshot();
+        self.status = format!("Saving {}...", display_path(&path));
+
+        Task::perform(save_snapshot_to_path(path, snapshot), Message::SaveFinished)
     }
 
     pub(super) fn load(&mut self) -> Task<Message> {
+        if self.is_dirty() {
+            self.request_confirmation(Confirmation::Load);
+            return Task::none();
+        }
+
+        self.start_load()
+    }
+
+    fn start_load(&mut self) -> Task<Message> {
         self.status = "Loading...".to_string();
 
         Task::perform(load_snapshot(), Message::LoadFinished)
@@ -270,7 +316,12 @@ impl GuiApp {
     pub(super) fn finish_save(&mut self, result: SaveResult) -> UiEffect {
         self.status = match result {
             SaveResult::Cancelled => "Save cancelled".to_string(),
-            SaveResult::Saved(path) => format!("Saved {}", display_path(&path)),
+            SaveResult::Saved(path, snapshot) => {
+                let status = format!("Saved {}", display_path(&path));
+                self.current_path = Some(path);
+                self.saved_snapshot = snapshot;
+                status
+            }
             SaveResult::Failed(error) => format!("Save failed: {error}"),
         };
 
@@ -285,6 +336,8 @@ impl GuiApp {
             LoadResult::Loaded(path, snapshot) => match Engine::from_snapshot(snapshot) {
                 Ok(engine) => {
                     self.engine = engine;
+                    self.current_path = Some(path.clone());
+                    self.saved_snapshot = self.engine.snapshot();
                     self.reset_after_load(&format!("Loaded {}", display_path(&path)));
                 }
                 Err(error) => {
@@ -297,6 +350,58 @@ impl GuiApp {
         }
 
         UiEffect::None
+    }
+
+    pub(super) fn confirm_pending(&mut self) -> Task<Message> {
+        let Some(confirmation) = self.pending_confirmation.take() else {
+            return Task::none();
+        };
+
+        match confirmation {
+            Confirmation::Delete(id) => {
+                self.perform_delete_entry(id);
+                Task::none()
+            }
+            Confirmation::Clear => {
+                self.perform_clear();
+                Task::none()
+            }
+            Confirmation::Load => self.start_load(),
+            Confirmation::Quit => iced::exit(),
+            Confirmation::CloseMain(_) => {
+                self.main_window = None;
+                iced::exit()
+            }
+        }
+    }
+
+    pub(super) fn cancel_confirmation(&mut self) -> UiEffect {
+        self.pending_confirmation = None;
+        self.status = "Action cancelled".to_string();
+        UiEffect::None
+    }
+
+    pub(super) fn quit(&mut self) -> Task<Message> {
+        if self.is_dirty() {
+            self.request_confirmation(Confirmation::Quit);
+            Task::none()
+        } else {
+            iced::exit()
+        }
+    }
+
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.engine.snapshot() != self.saved_snapshot
+    }
+
+    pub(super) fn request_confirmation(&mut self, confirmation: Confirmation) {
+        self.pending_confirmation = Some(confirmation);
+        self.status = match confirmation {
+            Confirmation::Delete(id) => format!("Confirm deletion of {id}"),
+            Confirmation::Clear => "Confirm clear".to_string(),
+            Confirmation::Load => "Confirm load".to_string(),
+            Confirmation::Quit | Confirmation::CloseMain(_) => "Confirm quit".to_string(),
+        };
     }
 
     pub(super) fn undo(&mut self) -> UiEffect {
@@ -538,22 +643,35 @@ fn is_character_key(key: &Key, expected: &str) -> bool {
     matches!(key, Key::Character(value) if value.eq_ignore_ascii_case(expected))
 }
 
-async fn save_snapshot(snapshot: EngineSnapshot) -> SaveResult {
+async fn save_snapshot_with_dialog(
+    snapshot: EngineSnapshot,
+    current_path: Option<PathBuf>,
+) -> SaveResult {
+    let file_name = current_path
+        .as_deref()
+        .and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or("dagcal-session.json");
+
     let Some(path) = rfd::FileDialog::new()
         .add_filter("Dagcal session", &["json"])
-        .set_file_name("dagcal-session.json")
+        .set_file_name(file_name)
         .save_file()
     else {
         return SaveResult::Cancelled;
     };
 
+    save_snapshot_to_path(path, snapshot).await
+}
+
+async fn save_snapshot_to_path(path: PathBuf, snapshot: EngineSnapshot) -> SaveResult {
     let json = match serde_json::to_string_pretty(&snapshot) {
         Ok(json) => json,
         Err(error) => return SaveResult::Failed(format!("could not encode JSON ({error})")),
     };
 
     match std::fs::write(&path, json) {
-        Ok(()) => SaveResult::Saved(path),
+        Ok(()) => SaveResult::Saved(path, snapshot),
         Err(error) => SaveResult::Failed(format!("could not write file ({error})")),
     }
 }

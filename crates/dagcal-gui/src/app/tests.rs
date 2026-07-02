@@ -535,6 +535,11 @@ fn delete_keeps_later_ids_available() {
     app.submit_input();
 
     app.delete_entry(ExpressionId::new(1));
+    assert_eq!(
+        app.pending_confirmation,
+        Some(Confirmation::Delete(ExpressionId::new(1)))
+    );
+    let _ = app.update(Message::ConfirmPending);
 
     assert_eq!(app.entries.len(), 1);
     assert_eq!(app.entries[0].id, ExpressionId::new(2));
@@ -560,6 +565,12 @@ fn delete_key_removes_selected_entry() {
         text: None,
         repeat: false,
     });
+
+    assert_eq!(
+        app.pending_confirmation,
+        Some(Confirmation::Delete(ExpressionId::new(1)))
+    );
+    let _ = app.update(Message::ConfirmPending);
 
     assert_eq!(app.entries.len(), 1);
     assert_eq!(app.entries[0].id, ExpressionId::new(2));
@@ -700,11 +711,117 @@ fn deleting_edited_entry_selects_fallback_without_entering_edit() {
 
     app.start_edit(ExpressionId::new(1));
     app.delete_entry(ExpressionId::new(1));
+    let _ = app.update(Message::ConfirmPending);
 
     assert_eq!(app.entries.len(), 1);
     assert_eq!(app.selected, Some(ExpressionId::new(2)));
     assert_eq!(app.editing, None);
     assert_eq!(app.input.source(), "");
+}
+
+#[test]
+fn delete_confirmation_cancel_preserves_entry_state() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    let before = app.engine.snapshot();
+
+    app.delete_entry(ExpressionId::new(1));
+    assert_eq!(
+        app.pending_confirmation,
+        Some(Confirmation::Delete(ExpressionId::new(1)))
+    );
+
+    let _ = app.update(Message::CancelConfirmation);
+
+    assert_eq!(app.engine.snapshot(), before);
+    assert_eq!(app.entries.len(), 1);
+    assert_eq!(app.pending_confirmation, None);
+    assert_eq!(app.status, "Action cancelled");
+}
+
+#[test]
+fn dirty_state_tracks_saved_snapshot() {
+    let (mut app, _) = GuiApp::new();
+
+    assert!(!app.is_dirty());
+    assert_eq!(app.main_title(), "dagcal - Untitled");
+    assert_eq!(app.file_status_text(), "File: Untitled    Saved");
+
+    app.input.set("10".to_string());
+    app.submit_input();
+
+    assert!(app.is_dirty());
+    assert_eq!(app.main_title(), "* dagcal - Untitled");
+    assert_eq!(app.file_status_text(), "File: Untitled    Unsaved changes");
+
+    let snapshot = app.engine.snapshot();
+    app.finish_save(SaveResult::Saved(
+        PathBuf::from("session.json"),
+        snapshot.clone(),
+    ));
+
+    assert!(!app.is_dirty());
+    assert_eq!(app.current_path, Some(PathBuf::from("session.json")));
+    assert_eq!(app.saved_snapshot, snapshot);
+    assert_eq!(app.main_title(), "dagcal - session.json");
+    assert_eq!(app.file_status_text(), "File: session.json    Saved");
+}
+
+#[test]
+fn load_result_marks_loaded_snapshot_clean_and_sets_current_path() {
+    let (mut app, _) = GuiApp::new();
+    let mut loaded = dagcal_core::Engine::new();
+    loaded.execute("x = 2");
+    let loaded_snapshot = loaded.snapshot();
+
+    app.finish_load(LoadResult::Loaded(
+        PathBuf::from("session.json"),
+        loaded_snapshot,
+    ));
+
+    assert!(!app.is_dirty());
+    assert_eq!(app.current_path, Some(PathBuf::from("session.json")));
+    assert_eq!(app.file_status_text(), "File: session.json    Saved");
+}
+
+#[test]
+fn dirty_load_clear_and_quit_open_confirmation_before_mutating() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    let before = app.engine.snapshot();
+
+    let _ = app.update(Message::Load);
+    assert_eq!(app.pending_confirmation, Some(Confirmation::Load));
+    assert_eq!(app.engine.snapshot(), before);
+
+    let _ = app.update(Message::CancelConfirmation);
+    let _ = app.update(Message::Clear);
+    assert_eq!(app.pending_confirmation, Some(Confirmation::Clear));
+    assert_eq!(app.engine.snapshot(), before);
+
+    let _ = app.update(Message::CancelConfirmation);
+    let _ = app.update(Message::Quit);
+    assert_eq!(app.pending_confirmation, Some(Confirmation::Quit));
+    assert_eq!(app.engine.snapshot(), before);
+}
+
+#[test]
+fn confirming_clear_removes_entries_and_keeps_dirty_state() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+
+    let snapshot = app.engine.snapshot();
+    app.finish_save(SaveResult::Saved(PathBuf::from("session.json"), snapshot));
+    assert!(!app.is_dirty());
+
+    let _ = app.update(Message::Clear);
+
+    assert!(app.entries.is_empty());
+    assert!(app.is_dirty());
+    assert_eq!(app.status, "Cleared");
 }
 
 #[test]

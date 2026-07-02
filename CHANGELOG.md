@@ -7,6 +7,9 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- GUI: Added dirty-state tracking with current file display in the window title and status bar.
+- GUI: Added Save and Save As behavior that reuses the current file path after saving or loading a session.
+- GUI: Added in-app confirmation prompts for deleting entries and discarding unsaved changes before loading, clearing, or quitting.
 - GUI: Added a status bar that shows the latest status message, entry count, and undo/redo availability.
 - GUI: Added inline input completions for named entries, result references, constants, and functions.
 - GUI: Added an entry details window for full dependency and error details.
