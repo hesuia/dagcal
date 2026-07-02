@@ -40,4 +40,9 @@ impl Draft {
         self.source.push(' ');
         self.loaded_selection = None;
     }
+
+    pub(super) fn replace_range(&mut self, range: std::ops::Range<usize>, replacement: &str) {
+        self.source.replace_range(range, replacement);
+        self.loaded_selection = None;
+    }
 }

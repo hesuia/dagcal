@@ -4,7 +4,8 @@ mod input;
 mod menu;
 
 use crate::app::{GuiApp, Message};
-use iced::widget::{button, column, container, rule, text};
+use crate::style::status_bar_style;
+use iced::widget::{button, column, container, row, rule, text};
 use iced::{Element, Fill, Length, window};
 
 impl GuiApp {
@@ -36,6 +37,7 @@ impl GuiApp {
                 rule::horizontal(1),
                 self.input_view(),
                 self.selected_detail_view(),
+                self.status_bar_view(),
             ]
             .spacing(12)
             .padding(16),
@@ -43,6 +45,36 @@ impl GuiApp {
         .width(Fill)
         .height(Fill)
         .into()
+    }
+
+    fn status_bar_view(&self) -> Element<'_, Message> {
+        container(
+            row![
+                text(self.status.clone())
+                    .size(13)
+                    .width(Length::FillPortion(3)),
+                text(format!("Entries: {}", self.entries.len()))
+                    .size(13)
+                    .width(Length::FillPortion(1)),
+                text(self.history_status_text())
+                    .size(13)
+                    .width(Length::FillPortion(2)),
+            ]
+            .spacing(12)
+            .align_y(iced::Center),
+        )
+        .padding([7, 10])
+        .width(Fill)
+        .style(|_| status_bar_style())
+        .into()
+    }
+
+    pub(super) fn history_status_text(&self) -> String {
+        format!(
+            "Undo: {}    Redo: {}",
+            availability_label(self.engine.can_undo()),
+            availability_label(self.engine.can_redo())
+        )
     }
 
     fn help_window_view(&self, window: window::Id) -> Element<'_, Message> {
@@ -72,4 +104,8 @@ impl GuiApp {
         .height(Fill)
         .into()
     }
+}
+
+fn availability_label(available: bool) -> &'static str {
+    if available { "yes" } else { "no" }
 }

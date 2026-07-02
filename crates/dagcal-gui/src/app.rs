@@ -1,4 +1,5 @@
 mod actions;
+mod completion;
 mod draft;
 mod effects;
 
@@ -8,6 +9,7 @@ mod tests;
 pub(crate) use draft::Draft;
 pub(crate) use effects::{ENTRIES_SCROLLABLE_ID, EXPRESSION_INPUT_ID};
 
+use self::completion::CompletionState;
 use dagcal_core::{Engine, EngineSnapshot, EntryView, ExpressionId};
 use iced::{Size, Subscription, Task, keyboard, window};
 use std::path::PathBuf;
@@ -37,6 +39,8 @@ pub enum Message {
     Redo,
     InsertConstant(String),
     InsertFunction(String),
+    AcceptCompletion(usize),
+    DismissCompletion,
     Quit,
     ShowAbout,
     ShowKeyboardShortcuts,
@@ -69,6 +73,7 @@ pub struct GuiApp {
     pub(crate) selected: Option<ExpressionId>,
     pub(crate) hovered_entry: Option<ExpressionId>,
     pub(crate) status: String,
+    pub(crate) completion: CompletionState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +103,7 @@ impl GuiApp {
                 selected: None,
                 hovered_entry: None,
                 status: "Ready".to_string(),
+                completion: CompletionState::default(),
             },
             open_main_window.discard(),
         )
@@ -134,6 +140,14 @@ impl GuiApp {
             Message::Redo => self.redo(),
             Message::InsertConstant(name) => self.insert_constant(name),
             Message::InsertFunction(name) => self.insert_function(name),
+            Message::AcceptCompletion(index) => {
+                self.accept_completion(index);
+                effects::UiEffect::FocusInput
+            }
+            Message::DismissCompletion => {
+                self.close_completions();
+                effects::UiEffect::None
+            }
             Message::Quit => return iced::exit(),
             Message::ShowAbout => return self.open_help_window(HelpTopic::About),
             Message::ShowKeyboardShortcuts => {

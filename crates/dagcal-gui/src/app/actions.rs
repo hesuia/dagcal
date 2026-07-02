@@ -1,5 +1,6 @@
 use super::effects::{ENTRIES_SCROLLABLE_ID, UiEffect};
 use super::{GuiApp, LoadResult, Message, SaveResult};
+use crate::app::completion::CompletionDirection;
 use crate::formatting::{entry_expression_source, entry_reference_token, state_summary};
 use dagcal_core::{Engine, EngineSnapshot, EntryView, ExpressionId};
 use iced::Task;
@@ -10,6 +11,7 @@ use std::path::{Path, PathBuf};
 impl GuiApp {
     pub(super) fn input_changed(&mut self, value: String) -> UiEffect {
         self.input.set(value);
+        self.refresh_completions();
         if self.ensure_empty_draft_entry() {
             UiEffect::ScrollToSelection
         } else {
@@ -18,7 +20,12 @@ impl GuiApp {
     }
 
     pub(super) fn submit_input(&mut self) -> UiEffect {
+        if self.accept_selected_completion() {
+            return UiEffect::FocusInput;
+        }
+
         let source = self.input.source().trim().to_string();
+        self.close_completions();
 
         if let Some(id) = self.editing {
             let result = self.engine.set_statement_by_id(id, source);
@@ -42,6 +49,7 @@ impl GuiApp {
     }
 
     pub(super) fn start_edit(&mut self, id: ExpressionId) -> UiEffect {
+        self.close_completions();
         self.load_edit_entry(id, SelectionStatus::Set(format!("Editing {id}")));
         UiEffect::None
     }
@@ -50,6 +58,7 @@ impl GuiApp {
         self.editing = None;
         self.draft_entry = None;
         self.input.clear();
+        self.close_completions();
         if self.ensure_empty_draft_entry() {
             UiEffect::ScrollToSelection
         } else {
@@ -60,6 +69,7 @@ impl GuiApp {
     pub(super) fn cancel_edit(&mut self) -> UiEffect {
         self.editing = None;
         self.input.clear();
+        self.close_completions();
         self.status = "Edit cancelled".to_string();
         UiEffect::None
     }
@@ -81,11 +91,13 @@ impl GuiApp {
                 if self.selected.is_none() {
                     self.editing = None;
                     self.input.clear();
+                    self.close_completions();
                 }
             }
             if was_editing {
                 self.editing = None;
                 self.input.clear();
+                self.close_completions();
             }
             self.status = format!("Removed {id}");
         } else {
@@ -122,6 +134,7 @@ impl GuiApp {
             .unwrap_or_else(|| id.to_string());
 
         self.input.insert_token(&token);
+        self.refresh_completions();
         self.ensure_empty_draft_entry();
         self.status = format!("Inserted {token}");
         UiEffect::FocusInput
@@ -129,6 +142,7 @@ impl GuiApp {
 
     pub(super) fn insert_constant(&mut self, name: String) -> UiEffect {
         self.input.insert_token(&name);
+        self.refresh_completions();
         self.ensure_empty_draft_entry();
         self.status = format!("Inserted {name}");
         UiEffect::FocusInput
@@ -137,6 +151,7 @@ impl GuiApp {
     pub(super) fn insert_function(&mut self, name: String) -> UiEffect {
         let token = format!("{name}()");
         self.input.insert_token(&token);
+        self.refresh_completions();
         self.ensure_empty_draft_entry();
         self.status = format!("Inserted {token}");
         UiEffect::FocusInput
@@ -178,6 +193,29 @@ impl GuiApp {
             keyboard::Event::KeyPressed {
                 key: Key::Named(key::Named::ArrowUp),
                 ..
+            } if self.completion_is_open() => {
+                self.move_completion_selection(CompletionDirection::Previous)
+            }
+            keyboard::Event::KeyPressed {
+                key: Key::Named(key::Named::ArrowDown),
+                ..
+            } if self.completion_is_open() => {
+                self.move_completion_selection(CompletionDirection::Next)
+            }
+            keyboard::Event::KeyPressed {
+                key: Key::Named(key::Named::Tab),
+                ..
+            } if self.completion_is_open() => {
+                self.accept_selected_completion();
+                return UiEffect::FocusInput;
+            }
+            keyboard::Event::KeyPressed {
+                key: Key::Named(key::Named::Escape),
+                ..
+            } if self.completion_is_open() => self.close_completions(),
+            keyboard::Event::KeyPressed {
+                key: Key::Named(key::Named::ArrowUp),
+                ..
             } => self.move_selection(SelectionDirection::Previous),
             keyboard::Event::KeyPressed {
                 key: Key::Named(key::Named::ArrowDown),
@@ -207,6 +245,7 @@ impl GuiApp {
         self.engine.clear();
         self.entries = self.engine.entries();
         self.input.clear();
+        self.close_completions();
         self.editing = None;
         self.draft_entry = None;
         self.selected = None;
@@ -363,11 +402,12 @@ impl GuiApp {
         if changed && self.editing.is_some() {
             self.editing = None;
             self.input.clear();
+            self.close_completions();
             self.status = "Edit cancelled".to_string();
         }
     }
 
-    fn ensure_empty_draft_entry(&mut self) -> bool {
+    pub(super) fn ensure_empty_draft_entry(&mut self) -> bool {
         if self.editing.is_some() {
             return false;
         }
@@ -408,6 +448,7 @@ impl GuiApp {
         self.status = format!("{id} = {}", state_summary(&result.execution.state));
         self.editing = None;
         self.input.clear();
+        self.close_completions();
     }
 
     fn remove_redirected_draft(&mut self, requested_id: ExpressionId, saved_id: ExpressionId) {
@@ -455,6 +496,7 @@ impl GuiApp {
     fn reset_after_history_restore(&mut self, status: &str) {
         self.entries = self.engine.entries();
         self.input.clear();
+        self.close_completions();
         self.editing = None;
         self.draft_entry = None;
         self.hovered_entry = None;
@@ -468,6 +510,7 @@ impl GuiApp {
     fn reset_after_load(&mut self, status: &str) {
         self.entries = self.engine.entries();
         self.input.clear();
+        self.close_completions();
         self.editing = None;
         self.draft_entry = None;
         self.hovered_entry = None;

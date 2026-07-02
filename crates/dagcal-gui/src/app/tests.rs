@@ -1,6 +1,8 @@
 use super::actions::SelectionDirection;
 use super::*;
-use dagcal_core::{EngineSnapshot, EntryState, ExpressionId, Number, PersistedEntry};
+use dagcal_core::{
+    CompletionKind, EngineSnapshot, EntryState, ExpressionId, Number, PersistedEntry,
+};
 use iced::keyboard::{self, Key, key};
 use std::path::PathBuf;
 
@@ -58,6 +60,109 @@ fn menu_function_inserts_call_template() {
     assert_eq!(app.input.source(), "sin() ");
     assert_eq!(app.status, "Inserted sin()");
     assert_eq!(app.draft_entry, Some(ExpressionId::new(1)));
+}
+
+#[test]
+fn input_change_opens_completion_for_named_entry() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("subtotal = 10".to_string());
+    app.submit_input();
+
+    let _ = app.update(Message::InputChanged("sub".to_string()));
+
+    assert!(app.completion_is_open());
+    assert!(app.completion_candidates().iter().any(|candidate| {
+        candidate.label == "subtotal" && candidate.kind == CompletionKind::Entry
+    }));
+}
+
+#[test]
+fn submit_accepts_completion_before_saving_input() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("subtotal = 10".to_string());
+    app.submit_input();
+
+    let _ = app.update(Message::InputChanged("sub".to_string()));
+    let _ = app.update(Message::Submit);
+
+    assert_eq!(app.input.source(), "subtotal");
+    assert_eq!(app.entries.len(), 2);
+    assert_eq!(app.entries[0].name.as_deref(), Some("subtotal"));
+    assert_eq!(app.entries[1].source, "");
+    assert_eq!(app.status, "Inserted subtotal");
+}
+
+#[test]
+fn completion_finds_result_references_and_moves_selection() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    app.input.set("20".to_string());
+    app.submit_input();
+
+    let _ = app.update(Message::InputChanged("$".to_string()));
+    assert_eq!(app.selected_completion_index(), Some(0));
+
+    app.handle_keyboard_event(named_key_event(key::Named::ArrowDown));
+    assert_eq!(app.selected_completion_index(), Some(1));
+
+    app.handle_keyboard_event(named_key_event(key::Named::ArrowUp));
+    assert_eq!(app.selected_completion_index(), Some(0));
+}
+
+#[test]
+fn tab_accepts_selected_completion() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+
+    let _ = app.update(Message::InputChanged("$".to_string()));
+    let effect = app.handle_keyboard_event(named_key_event(key::Named::Tab));
+
+    assert_eq!(app.input.source(), "$1");
+    assert_eq!(app.status, "Inserted $1");
+    assert!(!app.completion_is_open());
+    assert_eq!(effect, super::effects::UiEffect::FocusInput);
+}
+
+#[test]
+fn escape_closes_completion() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+
+    let _ = app.update(Message::InputChanged("$".to_string()));
+    app.handle_keyboard_event(named_key_event(key::Named::Escape));
+
+    assert!(!app.completion_is_open());
+    assert_eq!(app.input.source(), "$");
+}
+
+#[test]
+fn dismiss_completion_message_closes_completion() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+
+    let _ = app.update(Message::InputChanged("$".to_string()));
+    let _ = app.update(Message::DismissCompletion);
+
+    assert!(!app.completion_is_open());
+    assert_eq!(app.input.source(), "$");
+}
+
+#[test]
+fn status_bar_history_text_reflects_undo_and_redo_availability() {
+    let (mut app, _) = GuiApp::new();
+
+    assert_eq!(app.history_status_text(), "Undo: no    Redo: no");
+
+    app.input.set("10".to_string());
+    app.submit_input();
+    assert_eq!(app.history_status_text(), "Undo: yes    Redo: no");
+
+    app.undo();
+    assert_eq!(app.history_status_text(), "Undo: no    Redo: yes");
 }
 
 #[test]
@@ -698,6 +803,18 @@ fn character_key_event(value: &str, modifiers: keyboard::Modifiers) -> keyboard:
         physical_key: key::Physical::Code(key::Code::KeyZ),
         location: keyboard::Location::Standard,
         modifiers,
+        text: None,
+        repeat: false,
+    }
+}
+
+fn named_key_event(named: key::Named) -> keyboard::Event {
+    keyboard::Event::KeyPressed {
+        key: Key::Named(named),
+        modified_key: Key::Named(named),
+        physical_key: key::Physical::Code(key::Code::Tab),
+        location: keyboard::Location::Standard,
+        modifiers: keyboard::Modifiers::default(),
         text: None,
         repeat: false,
     }

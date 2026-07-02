@@ -30,7 +30,7 @@ pub(super) fn subscription(app: &GuiApp) -> Subscription<Message> {
     });
     let window_closes = iced::window::close_requests().map(Message::WindowClosed);
 
-    let input_events = if app.selection_navigation_enabled() {
+    let input_events = if app.selection_navigation_enabled() || app.completion_is_open() {
         let keyboard_events = event::listen_with(|event, _status, window| match event {
             iced::Event::Keyboard(event) => Some(Message::Keyboard(window, event)),
             _ => None,

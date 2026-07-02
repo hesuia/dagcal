@@ -58,6 +58,39 @@ pub(crate) fn context_menu_panel_style() -> iced::widget::container::Style {
         )
 }
 
+pub(crate) fn completion_panel_style() -> iced::widget::container::Style {
+    iced::widget::container::Style::default()
+        .background(Background::Color(Color::from_rgb(0.12, 0.14, 0.16)))
+        .border(
+            Border::default()
+                .rounded(4)
+                .width(1)
+                .color(Color::from_rgb(0.31, 0.36, 0.40)),
+        )
+}
+
+pub(crate) fn completion_item_style(selected: bool) -> iced::widget::container::Style {
+    if selected {
+        iced::widget::container::Style::default()
+            .background(Background::Color(Color::from_rgb(0.20, 0.41, 0.47)))
+            .border(Border::default().rounded(3))
+    } else {
+        iced::widget::container::Style::default()
+            .background(Background::Color(Color::from_rgb(0.16, 0.18, 0.20)))
+    }
+}
+
+pub(crate) fn status_bar_style() -> iced::widget::container::Style {
+    iced::widget::container::Style::default()
+        .background(Background::Color(Color::from_rgb(0.10, 0.12, 0.14)))
+        .border(
+            Border::default()
+                .rounded(4)
+                .width(1)
+                .color(Color::from_rgb(0.23, 0.28, 0.31)),
+        )
+}
+
 pub(crate) fn context_menu_item_style(status: button::Status) -> iced::widget::button::Style {
     let background = match status {
         button::Status::Active => Color::from_rgb(0.18, 0.21, 0.24),
