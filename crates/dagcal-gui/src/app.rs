@@ -41,6 +41,7 @@ pub enum Message {
     InsertFunction(String),
     AcceptCompletion(usize),
     DismissCompletion,
+    ShowDetails(ExpressionId),
     Quit,
     ShowAbout,
     ShowKeyboardShortcuts,
@@ -64,6 +65,8 @@ pub enum LoadResult {
 pub struct GuiApp {
     pub(crate) main_window: Option<window::Id>,
     pub(crate) help_window: Option<window::Id>,
+    pub(crate) details_window: Option<window::Id>,
+    pub(crate) details_target: Option<ExpressionId>,
     pub(crate) help_topic: HelpTopic,
     pub(crate) engine: Engine,
     pub(crate) entries: Vec<EntryView>,
@@ -94,6 +97,8 @@ impl GuiApp {
             Self {
                 main_window: Some(main_window),
                 help_window: None,
+                details_window: None,
+                details_target: None,
                 help_topic: HelpTopic::KeyboardShortcuts,
                 engine: Engine::new(),
                 entries: Vec::new(),
@@ -148,6 +153,7 @@ impl GuiApp {
                 self.close_completions();
                 effects::UiEffect::None
             }
+            Message::ShowDetails(id) => return self.open_details_window(id),
             Message::Quit => return iced::exit(),
             Message::ShowAbout => return self.open_help_window(HelpTopic::About),
             Message::ShowKeyboardShortcuts => {
@@ -185,9 +191,36 @@ impl GuiApp {
         open_window.discard()
     }
 
+    fn open_details_window(&mut self, id: ExpressionId) -> Task<Message> {
+        self.details_target = Some(id);
+
+        if self.details_window.is_some() {
+            self.status = format!("Showing details for {id}");
+            return Task::none();
+        }
+
+        let (window, open_window) = window::open(window::Settings {
+            size: Size::new(640.0, 460.0),
+            min_size: Some(Size::new(480.0, 320.0)),
+            exit_on_close_request: false,
+            ..window::Settings::default()
+        });
+
+        self.details_window = Some(window);
+        self.status = format!("Opened details for {id}");
+
+        open_window.discard()
+    }
+
     fn window_closed(&mut self, id: window::Id) -> Task<Message> {
         if self.help_window == Some(id) {
             self.help_window = None;
+            return window::close(id);
+        }
+
+        if self.details_window == Some(id) {
+            self.details_window = None;
+            self.details_target = None;
             return window::close(id);
         }
 

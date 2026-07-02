@@ -86,6 +86,7 @@ fn entry_row<'a>(
 fn entry_context_menu(id: ExpressionId) -> Element<'static, Message> {
     container(
         column![
+            context_menu_item("Details...", Message::ShowDetails(id)),
             context_menu_item("Edit", Message::Edit(id)),
             context_menu_item("Recalculate", Message::Recalculate(id)),
             context_menu_item("Delete", Message::Delete(id)),
@@ -93,7 +94,7 @@ fn entry_context_menu(id: ExpressionId) -> Element<'static, Message> {
         .spacing(3),
     )
     .padding(5)
-    .width(Length::Fixed(150.0))
+    .width(Length::Fixed(160.0))
     .style(|_| context_menu_panel_style())
     .into()
 }

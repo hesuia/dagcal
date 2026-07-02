@@ -10,6 +10,13 @@ use iced::{Element, Fill, Length, window};
 
 impl GuiApp {
     pub(crate) fn title(&self, window: window::Id) -> String {
+        if self.details_window == Some(window) {
+            return match self.details_target {
+                Some(id) => format!("dagcal Details - {id}"),
+                None => "dagcal Details".to_string(),
+            };
+        }
+
         if self.help_window == Some(window) {
             return match self.help_topic {
                 crate::app::HelpTopic::KeyboardShortcuts => "dagcal Help - Keyboard shortcuts",
@@ -22,6 +29,10 @@ impl GuiApp {
     }
 
     pub(crate) fn view(&self, window: window::Id) -> Element<'_, Message> {
+        if self.details_window == Some(window) {
+            return self.details_window_view(window);
+        }
+
         if self.help_window == Some(window) {
             return self.help_window_view(window);
         }

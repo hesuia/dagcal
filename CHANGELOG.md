@@ -9,6 +9,7 @@ The format is based on Keep a Changelog.
 ### Added
 - GUI: Added a status bar that shows the latest status message, entry count, and undo/redo availability.
 - GUI: Added inline input completions for named entries, result references, constants, and functions.
+- GUI: Added an entry details window for full dependency and error details.
 - GUI: Added per-entry recalculation to the right-click menu and a menu-bar action to recalculate all entries.
 - Core: Added public APIs for manually recomputing one entry or all stored entries.
 - Core: Manual recomputation now reparses and resolves stored source so expressions can recover after referenced names are defined later.

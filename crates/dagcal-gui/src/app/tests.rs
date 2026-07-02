@@ -180,6 +180,50 @@ fn help_menu_messages_open_help_window() {
 }
 
 #[test]
+fn show_details_opens_details_window_for_entry() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+
+    let _ = app.update(Message::ShowDetails(ExpressionId::new(1)));
+
+    assert!(app.details_window.is_some());
+    assert_eq!(app.details_target, Some(ExpressionId::new(1)));
+    assert_eq!(app.status, "Opened details for $1");
+}
+
+#[test]
+fn show_details_reuses_open_details_window() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    app.input.set("20".to_string());
+    app.submit_input();
+
+    let _ = app.update(Message::ShowDetails(ExpressionId::new(1)));
+    let window = app.details_window;
+    let _ = app.update(Message::ShowDetails(ExpressionId::new(2)));
+
+    assert_eq!(app.details_window, window);
+    assert_eq!(app.details_target, Some(ExpressionId::new(2)));
+    assert_eq!(app.status, "Showing details for $2");
+}
+
+#[test]
+fn closing_details_window_clears_details_state() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    let _ = app.update(Message::ShowDetails(ExpressionId::new(1)));
+    let window = app.details_window.unwrap();
+
+    let _ = app.update(Message::WindowClosed(window));
+
+    assert_eq!(app.details_window, None);
+    assert_eq!(app.details_target, None);
+}
+
+#[test]
 fn selecting_entry_updates_selection_without_entering_edit() {
     let (mut app, _) = GuiApp::new();
     app.input.set("21".to_string());
