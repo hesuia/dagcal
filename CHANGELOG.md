@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-02
+
 ### Added
 - GUI: Added dirty-state tracking with current file display in the window title and status bar.
 - GUI: Added Save and Save As behavior that reuses the current file path after saving or loading a session.
