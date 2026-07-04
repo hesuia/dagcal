@@ -1,13 +1,13 @@
 mod details;
+mod dialogs;
 mod entries;
 mod input;
 mod menu;
 
-use crate::app::{Confirmation, GuiApp, Message};
-use crate::style::{menu_button_style, status_bar_style};
-use iced::widget::{button, column, container, row, rule, text};
+use crate::app::{GuiApp, Message};
+use crate::style::status_bar_style;
+use iced::widget::{column, container, row, rule, text};
 use iced::{Element, Fill, Length, window};
-use std::path::Path;
 
 impl GuiApp {
     pub(crate) fn title(&self, window: window::Id) -> String {
@@ -70,7 +70,7 @@ impl GuiApp {
     fn status_bar_view(&self) -> Element<'_, Message> {
         container(
             row![
-                text(self.status.clone())
+                text(self.session.status.clone())
                     .size(13)
                     .width(Length::FillPortion(3)),
                 text(self.entry_count_status_text())
@@ -90,137 +90,5 @@ impl GuiApp {
         .width(Fill)
         .style(|_| status_bar_style())
         .into()
-    }
-
-    fn confirmation_window_view(&self, window: window::Id) -> Element<'_, Message> {
-        let Some(confirmation) = self.pending_confirmation else {
-            return container(
-                column![
-                    text("No pending action").size(24),
-                    button("Close").on_press(Message::WindowClosed(window)),
-                ]
-                .spacing(16)
-                .padding(24)
-                .width(Length::Fill),
-            )
-            .width(Fill)
-            .height(Fill)
-            .into();
-        };
-        let (title, body, action) = confirmation_text(confirmation);
-
-        container(
-            column![
-                text(title).size(24),
-                text(body).size(15),
-                row![
-                    button("Cancel")
-                        .padding([7, 12])
-                        .style(|_, status| menu_button_style(status))
-                        .on_press(Message::CancelConfirmation),
-                    button(action)
-                        .padding([7, 12])
-                        .style(|_, status| menu_button_style(status))
-                        .on_press(Message::ConfirmPending),
-                ]
-                .spacing(10)
-                .align_y(iced::Center),
-            ]
-            .spacing(16)
-            .padding(24)
-            .width(Length::Fill),
-        )
-        .width(Fill)
-        .height(Fill)
-        .into()
-    }
-
-    pub(super) fn main_title(&self) -> String {
-        let dirty = if self.is_dirty() { "* " } else { "" };
-        format!("{dirty}dagcal - {}", self.document_name())
-    }
-
-    pub(super) fn file_status_text(&self) -> String {
-        let state = if self.is_dirty() {
-            "Unsaved changes"
-        } else {
-            "Saved"
-        };
-
-        format!("File: {}    {state}", self.document_name())
-    }
-
-    fn document_name(&self) -> String {
-        self.current_path
-            .as_deref()
-            .map(path_label)
-            .unwrap_or_else(|| "Untitled".to_string())
-    }
-
-    pub(super) fn history_status_text(&self) -> String {
-        format!(
-            "Undo: {}    Redo: {}",
-            availability_label(self.engine.can_undo()),
-            availability_label(self.engine.can_redo())
-        )
-    }
-
-    fn help_window_view(&self, window: window::Id) -> Element<'_, Message> {
-        let (title, body) = match self.help_topic {
-            crate::app::HelpTopic::KeyboardShortcuts => (
-                "Keyboard shortcuts",
-                "Ctrl+F: Search entries\nEsc: Close completion or entry search\nCtrl+Z: Undo\nCtrl+Y: Redo\nDelete: Remove the selected entry\nArrow Up/Down: Move the selection when the input is empty",
-            ),
-            crate::app::HelpTopic::About => (
-                "About dagcal",
-                "dagcal is a dependency-aware calculator.\n\nExpressions are tracked as stable result IDs such as $1, and dependent entries are recomputed automatically.",
-            ),
-        };
-
-        container(
-            column![
-                text(title).size(28),
-                rule::horizontal(1),
-                text(body).size(16),
-                button("Close").on_press(Message::WindowClosed(window)),
-            ]
-            .spacing(16)
-            .padding(24)
-            .width(Length::Fill),
-        )
-        .width(Fill)
-        .height(Fill)
-        .into()
-    }
-}
-
-fn availability_label(available: bool) -> &'static str {
-    if available { "yes" } else { "no" }
-}
-
-fn path_label(path: &Path) -> String {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| path.display().to_string())
-}
-
-fn confirmation_text(confirmation: Confirmation) -> (&'static str, String, &'static str) {
-    match confirmation {
-        Confirmation::Clear => (
-            "Clear all entries?",
-            "All current entries will be removed.".to_string(),
-            "Clear",
-        ),
-        Confirmation::Load => (
-            "Load another session?",
-            "Unsaved changes will be discarded.".to_string(),
-            "Load",
-        ),
-        Confirmation::Quit | Confirmation::CloseMain(_) => (
-            "Quit dagcal?",
-            "Unsaved changes will be discarded.".to_string(),
-            "Quit",
-        ),
     }
 }

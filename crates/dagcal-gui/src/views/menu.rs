@@ -1,15 +1,9 @@
 use crate::app::{GuiApp, Message};
 use crate::style::{menu_bar_style, menu_button_style};
-use dagcal_app::{CompletionItem, CompletionKind};
+use dagcal_app::{CompletionKind, CompletionMenuEntry, completion_menu_entries_for_kind};
 use iced::widget::{button, container, row, text};
 use iced::{Element, Fill, Length};
 use iced_aw::menu::{Item, Menu, MenuBar};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct MenuEntry {
-    pub(super) label: String,
-    pub(super) detail: Option<String>,
-}
 
 impl GuiApp {
     pub(super) fn menu_bar_view(&self) -> Element<'_, Message> {
@@ -31,12 +25,18 @@ impl GuiApp {
         container(menu_bar).width(Fill).into()
     }
 
-    pub(super) fn constant_menu_entries(&self) -> Vec<MenuEntry> {
-        menu_entries_for_kind(self.engine.completion_items(), CompletionKind::Constant)
+    pub(super) fn constant_menu_entries(&self) -> Vec<CompletionMenuEntry> {
+        completion_menu_entries_for_kind(
+            self.session.engine.completion_items(),
+            CompletionKind::Constant,
+        )
     }
 
-    pub(super) fn function_menu_entries(&self) -> Vec<MenuEntry> {
-        menu_entries_for_kind(self.engine.completion_items(), CompletionKind::Function)
+    pub(super) fn function_menu_entries(&self) -> Vec<CompletionMenuEntry> {
+        completion_menu_entries_for_kind(
+            self.session.engine.completion_items(),
+            CompletionKind::Function,
+        )
     }
 }
 
@@ -110,7 +110,9 @@ fn help_menu() -> Menu<'static, Message, iced::Theme, iced::Renderer> {
     .offset(3.0)
 }
 
-fn constants_menu(entries: Vec<MenuEntry>) -> Menu<'static, Message, iced::Theme, iced::Renderer> {
+fn constants_menu(
+    entries: Vec<CompletionMenuEntry>,
+) -> Menu<'static, Message, iced::Theme, iced::Renderer> {
     let items = if entries.is_empty() {
         vec![Item::new(inert_menu_item("No constants"))]
     } else {
@@ -129,7 +131,9 @@ fn constants_menu(entries: Vec<MenuEntry>) -> Menu<'static, Message, iced::Theme
         .offset(3.0)
 }
 
-fn functions_menu(entries: Vec<MenuEntry>) -> Menu<'static, Message, iced::Theme, iced::Renderer> {
+fn functions_menu(
+    entries: Vec<CompletionMenuEntry>,
+) -> Menu<'static, Message, iced::Theme, iced::Renderer> {
     let items = if entries.is_empty() {
         vec![Item::new(inert_menu_item("No functions"))]
     } else {
@@ -150,17 +154,6 @@ fn functions_menu(entries: Vec<MenuEntry>) -> Menu<'static, Message, iced::Theme
         .width(Length::Fixed(260.0))
         .max_width(340.0)
         .offset(3.0)
-}
-
-fn menu_entries_for_kind(items: Vec<CompletionItem>, kind: CompletionKind) -> Vec<MenuEntry> {
-    items
-        .into_iter()
-        .filter(|item| item.kind == kind)
-        .map(|item| MenuEntry {
-            label: item.label,
-            detail: item.detail,
-        })
-        .collect()
 }
 
 fn menu_button(label: &'static str) -> Element<'static, Message> {
@@ -228,7 +221,8 @@ mod tests {
         let mut engine = Engine::new();
         engine.execute("x = 10");
 
-        let constants = menu_entries_for_kind(engine.completion_items(), CompletionKind::Constant);
+        let constants =
+            completion_menu_entries_for_kind(engine.completion_items(), CompletionKind::Constant);
 
         assert!(constants.iter().all(|entry| entry.label != "x"));
     }

@@ -14,14 +14,14 @@ use iced_aw::ContextMenu;
 
 impl GuiApp {
     pub(super) fn entries_view(&self) -> Element<'_, Message> {
-        let filtered_entries = self.filtered_entries();
+        let filtered_entries = self.session.filtered_entries();
         let mut list = column![].spacing(6);
-        if self.entry_search_open {
+        if self.session.entry_search_open {
             list = list.push(entry_filters(self));
         }
         list = list.push(entry_header());
 
-        if self.entries.is_empty() {
+        if self.session.entries.is_empty() {
             list = list.push(
                 container(text("No entries yet").size(16))
                     .padding(12)
@@ -37,9 +37,9 @@ impl GuiApp {
             for entry in filtered_entries {
                 list = list.push(entry_row(
                     entry,
-                    &self.entries,
-                    self.selected == Some(entry.id),
-                    self.draft_entry == Some(entry.id),
+                    &self.session.entries,
+                    self.session.selected == Some(entry.id),
+                    self.session.draft_entry == Some(entry.id),
                 ));
             }
         }
@@ -55,16 +55,24 @@ fn entry_filters(app: &GuiApp) -> Element<'_, Message> {
     let mut filters = row![
         text_input(
             "Search ID, name, expression, result...",
-            &app.entry_search_query
+            &app.session.entry_search_query
         )
         .id(ENTRY_SEARCH_INPUT_ID)
         .on_input(Message::EntrySearchChanged)
         .padding(8)
         .size(15)
         .width(Length::FillPortion(3)),
-        filter_button("All", EntryStateFilter::All, app.entry_state_filter),
-        filter_button("Values", EntryStateFilter::Values, app.entry_state_filter),
-        filter_button("Errors", EntryStateFilter::Errors, app.entry_state_filter),
+        filter_button("All", EntryStateFilter::All, app.session.entry_state_filter),
+        filter_button(
+            "Values",
+            EntryStateFilter::Values,
+            app.session.entry_state_filter
+        ),
+        filter_button(
+            "Errors",
+            EntryStateFilter::Errors,
+            app.session.entry_state_filter
+        ),
     ]
     .spacing(8)
     .align_y(iced::Center);

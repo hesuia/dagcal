@@ -5,14 +5,14 @@ use iced::{Element, Fill, Length, window};
 
 impl GuiApp {
     pub(super) fn selected_detail_view(&self) -> Element<'_, Message> {
-        let Some(id) = self.selected else {
+        let Some(id) = self.session.selected else {
             return fixed_line(
                 text("Details: select an entry").size(14),
                 DETAIL_HEIGHT * 2.0,
             );
         };
 
-        let Some(entry) = self.entries.iter().find(|entry| entry.id == id) else {
+        let Some(entry) = self.session.entries.iter().find(|entry| entry.id == id) else {
             return fixed_line(
                 text("Details: selected entry is not available").size(14),
                 DETAIL_HEIGHT * 2.0,
@@ -59,7 +59,7 @@ impl GuiApp {
             return "No entry selected.".to_string();
         };
 
-        let Some(entry) = self.entries.iter().find(|entry| entry.id == id) else {
+        let Some(entry) = self.session.entries.iter().find(|entry| entry.id == id) else {
             return format!("{id} is not available.");
         };
 

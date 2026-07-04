@@ -23,6 +23,12 @@ pub struct CompletionCandidate {
     pub kind: CompletionKind,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionMenuEntry {
+    pub label: String,
+    pub detail: Option<String>,
+}
+
 impl CompletionState {
     pub fn for_source(source: &str, items: Vec<CompletionItem>) -> Self {
         let Some(token) = completion_token(source) else {
@@ -186,6 +192,20 @@ pub(crate) fn accept_selected_completion(
     Some(SessionChange::FocusInput)
 }
 
+pub fn completion_menu_entries_for_kind(
+    items: Vec<CompletionItem>,
+    kind: CompletionKind,
+) -> Vec<CompletionMenuEntry> {
+    items
+        .into_iter()
+        .filter(|item| item.kind == kind)
+        .map(|item| CompletionMenuEntry {
+            label: item.label,
+            detail: item.detail,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +250,16 @@ mod tests {
         let state = CompletionState::for_source("1", engine.completion_items());
 
         assert!(!state.is_open());
+    }
+
+    #[test]
+    fn menu_entries_filter_completion_items_by_kind() {
+        let mut engine = Engine::new();
+        engine.execute("x = 10");
+
+        let constants =
+            completion_menu_entries_for_kind(engine.completion_items(), CompletionKind::Constant);
+
+        assert!(constants.iter().all(|entry| entry.label != "x"));
     }
 }

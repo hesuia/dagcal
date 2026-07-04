@@ -1,14 +1,20 @@
 mod actions;
+mod document;
 mod effects;
+mod file_io;
+mod keyboard;
+mod windows;
 
 #[cfg(test)]
 mod tests;
 
 pub(crate) use dagcal_app::EntryStateFilter;
 pub(crate) use effects::{ENTRIES_SCROLLABLE_ID, ENTRY_SEARCH_INPUT_ID, EXPRESSION_INPUT_ID};
+pub use file_io::{LoadResult, SaveResult};
+pub(crate) use windows::{Confirmation, HelpTopic};
 
 use dagcal_app::{AppSession, EngineSnapshot, ExpressionId};
-use iced::{Size, Subscription, Task, keyboard, window};
+use iced::{Size, Subscription, Task, keyboard as iced_keyboard, window};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 
@@ -31,7 +37,7 @@ pub enum Message {
     EntryHovered(ExpressionId),
     EntryUnhovered(ExpressionId),
     RightClick(window::Id),
-    Keyboard(window::Id, keyboard::Event),
+    Keyboard(window::Id, iced_keyboard::Event),
     Clear,
     Save,
     SaveAs,
@@ -53,20 +59,6 @@ pub enum Message {
     CancelConfirmation,
 }
 
-#[derive(Debug, Clone)]
-pub enum SaveResult {
-    Cancelled,
-    Saved(PathBuf, EngineSnapshot),
-    Failed(String),
-}
-
-#[derive(Debug, Clone)]
-pub enum LoadResult {
-    Cancelled,
-    Loaded(PathBuf, EngineSnapshot),
-    Failed(String),
-}
-
 pub struct GuiApp {
     pub(crate) main_window: Option<window::Id>,
     pub(crate) help_window: Option<window::Id>,
@@ -78,20 +70,6 @@ pub struct GuiApp {
     pub(crate) current_path: Option<PathBuf>,
     pub(crate) saved_snapshot: EngineSnapshot,
     pub(crate) pending_confirmation: Option<Confirmation>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HelpTopic {
-    KeyboardShortcuts,
-    About,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Confirmation {
-    Clear,
-    Load,
-    Quit,
-    CloseMain(window::Id),
 }
 
 impl GuiApp {
@@ -159,11 +137,11 @@ impl GuiApp {
             Message::InsertConstant(name) => self.insert_constant(name),
             Message::InsertFunction(name) => self.insert_function(name),
             Message::AcceptCompletion(index) => {
-                self.accept_completion(index);
+                self.session.accept_completion(index);
                 effects::UiEffect::FocusInput
             }
             Message::DismissCompletion => {
-                self.close_completions();
+                self.session.close_completions();
                 effects::UiEffect::None
             }
             Message::ShowDetails(id) => return self.open_details_window(id),
@@ -195,79 +173,5 @@ impl Deref for GuiApp {
 impl DerefMut for GuiApp {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.session
-    }
-}
-
-impl GuiApp {
-    fn open_help_window(&mut self, topic: HelpTopic) -> Task<Message> {
-        self.help_topic = topic;
-
-        if self.help_window.is_some() {
-            self.status = "Help is already open".to_string();
-            return Task::none();
-        }
-
-        let (id, open_window) = window::open(window::Settings {
-            size: Size::new(520.0, 420.0),
-            min_size: Some(Size::new(420.0, 320.0)),
-            exit_on_close_request: false,
-            ..window::Settings::default()
-        });
-
-        self.help_window = Some(id);
-        self.status = "Opened help".to_string();
-
-        open_window.discard()
-    }
-
-    fn open_details_window(&mut self, id: ExpressionId) -> Task<Message> {
-        self.details_target = Some(id);
-
-        if self.details_window.is_some() {
-            self.status = format!("Showing details for {id}");
-            return Task::none();
-        }
-
-        let (window, open_window) = window::open(window::Settings {
-            size: Size::new(640.0, 460.0),
-            min_size: Some(Size::new(480.0, 320.0)),
-            exit_on_close_request: false,
-            ..window::Settings::default()
-        });
-
-        self.details_window = Some(window);
-        self.status = format!("Opened details for {id}");
-
-        open_window.discard()
-    }
-
-    fn window_closed(&mut self, id: window::Id) -> Task<Message> {
-        if self.help_window == Some(id) {
-            self.help_window = None;
-            return window::close(id);
-        }
-
-        if self.details_window == Some(id) {
-            self.details_window = None;
-            self.details_target = None;
-            return window::close(id);
-        }
-
-        if self.confirmation_window == Some(id) {
-            self.confirmation_window = None;
-            self.pending_confirmation = None;
-            self.status = "Action cancelled".to_string();
-            return window::close(id);
-        }
-
-        if self.main_window == Some(id) {
-            if self.is_dirty() {
-                return self.request_confirmation(Confirmation::CloseMain(id));
-            }
-            self.main_window = None;
-            return iced::exit();
-        }
-
-        Task::none()
     }
 }

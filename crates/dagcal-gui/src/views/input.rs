@@ -10,12 +10,12 @@ use iced_aw::{DropDown, drop_down};
 
 impl GuiApp {
     pub(super) fn input_view(&self) -> Element<'_, Message> {
-        let source = self.input.source();
-        let label = match self.editing {
+        let source = self.session.input.source();
+        let label = match self.session.editing {
             Some(id) => format!("Edit {id}"),
             None => "New expression".to_string(),
         };
-        let resolved = resolved_source(source, &self.entries);
+        let resolved = resolved_source(source, &self.session.entries);
         let preview = self.preview_summary(source);
 
         let input = text_input("1 + 2, subtotal = 100, or $1 * 3", source)
@@ -24,11 +24,15 @@ impl GuiApp {
             .on_submit(Message::Submit)
             .padding(10)
             .size(18);
-        let input = DropDown::new(input, self.completion_view(), self.completion_is_open())
-            .width(Length::Fill)
-            .alignment(drop_down::Alignment::Bottom)
-            .offset(drop_down::Offset { x: 0.0, y: 4.0 })
-            .on_dismiss(Message::DismissCompletion);
+        let input = DropDown::new(
+            input,
+            self.completion_view(),
+            self.session.completion_is_open(),
+        )
+        .width(Length::Fill)
+        .alignment(drop_down::Alignment::Bottom)
+        .offset(drop_down::Offset { x: 0.0, y: 4.0 })
+        .on_dismiss(Message::DismissCompletion);
 
         let mut actions = row![
             button("New").on_press(Message::NewEntry),
@@ -37,7 +41,7 @@ impl GuiApp {
         .spacing(8)
         .align_y(iced::Center);
 
-        if self.editing.is_some() {
+        if self.session.editing.is_some() {
             actions = actions.push(button("Cancel").on_press(Message::CancelEdit));
         }
 
@@ -58,17 +62,17 @@ impl GuiApp {
             return "Preview: empty".to_string();
         }
 
-        match self.engine.eval_statement_once(source) {
+        match self.session.engine.eval_statement_once(source) {
             Ok(value) => format!("Preview: {value}"),
             Err(err) => format!("Preview error: {err}"),
         }
     }
 
     fn completion_view(&self) -> Element<'_, Message> {
-        let selected = self.selected_completion_index();
+        let selected = self.session.selected_completion_index();
         let mut candidates = column![].spacing(3);
 
-        for (index, candidate) in self.completion_candidates().iter().enumerate() {
+        for (index, candidate) in self.session.completion_candidates().iter().enumerate() {
             let detail = candidate
                 .detail
                 .as_deref()

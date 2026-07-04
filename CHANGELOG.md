@@ -15,6 +15,8 @@ The format is based on Keep a Changelog.
 - GUI/TUI: Route shared entry operations and frontend-facing state through `dagcal-app`.
 - GUI: Show discard-confirmation prompts in a separate window instead of inline in the main window.
 - GUI: Remove the confirmation prompt when deleting entries.
+- GUI: Refactored app actions, window handling, file I/O, keyboard handling, and dialog views into focused modules.
+- GUI: Reused shared `dagcal-app` completion menu entry helpers when building Insert menus.
 
 ## [0.3.0] - 2026-07-02
 
