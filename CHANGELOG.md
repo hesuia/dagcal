@@ -10,6 +10,7 @@ The format is based on Keep a Changelog.
 - Added a shared `dagcal-app` crate for UI-agnostic app session state, draft input, completion, filtering, and display formatting used by frontends.
 - GUI: Added entry search and All/Values/Errors filtering for the entries table.
 - GUI: Show entry search controls only while searching, with View menu, Ctrl+F, Clear, and Esc controls.
+- TUI: Added entry search, All/Values/Errors filtering, completions, input preview, selected-entry details, reference insertion, and manual recalculation actions backed by `dagcal-app`.
 
 ### Changed
 - GUI/TUI: Route shared entry operations and frontend-facing state through `dagcal-app`.
@@ -17,6 +18,7 @@ The format is based on Keep a Changelog.
 - GUI: Remove the confirmation prompt when deleting entries.
 - GUI: Refactored app actions, window handling, file I/O, keyboard handling, and dialog views into focused modules.
 - GUI: Reused shared `dagcal-app` completion menu entry helpers when building Insert menus.
+- TUI: Split terminal setup, keyboard handling, rendering, app actions, selectors, formatting, and tests into focused modules.
 
 ## [0.3.0] - 2026-07-02
 

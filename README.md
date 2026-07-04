@@ -55,6 +55,21 @@ Run the TUI:
 cargo run -p dagcal-tui
 ```
 
+TUI keys:
+
+- `i`: insert a new expression.
+- `e`: edit the selected entry.
+- `j`/`Down` and `k`/`Up`: move the selection.
+- `/`: search entries; type a query, `Tab` cycles All/Values/Errors, and `Esc` or `Enter` closes search.
+- `p`: insert the selected entry reference into the input.
+- `Tab`: accept the selected completion while inserting or editing.
+- `R`: recalculate the selected entry.
+- `A`: recalculate all entries.
+- `d`: delete the selected entry.
+- `u`/`r`: undo and redo.
+- `c`: clear entries.
+- `q`: quit.
+
 Run the GUI:
 
 ```sh
