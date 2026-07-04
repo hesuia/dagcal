@@ -1,18 +1,25 @@
-use crate::app::{ENTRIES_SCROLLABLE_ID, GuiApp, Message};
+use crate::app::{ENTRIES_SCROLLABLE_ID, ENTRY_SEARCH_INPUT_ID, EntryStateFilter, GuiApp, Message};
 use crate::formatting::{entry_expression_source, expression_spans, table_state_summary};
 use crate::style::{
-    TABLE_TEXT_SIZE, context_menu_item_style, context_menu_panel_style, row_container_style,
-    warning_color,
+    TABLE_TEXT_SIZE, context_menu_item_style, context_menu_panel_style, menu_button_style,
+    row_container_style, warning_color,
 };
 use dagcal_core::{EntryState, EntryView, ExpressionId};
 use iced::widget::text::Wrapping;
-use iced::widget::{button, column, container, mouse_area, rich_text, row, scrollable, text};
+use iced::widget::{
+    button, column, container, mouse_area, rich_text, row, scrollable, text, text_input,
+};
 use iced::{Element, Fill, Length};
 use iced_aw::ContextMenu;
 
 impl GuiApp {
     pub(super) fn entries_view(&self) -> Element<'_, Message> {
-        let mut list = column![entry_header()].spacing(6);
+        let filtered_entries = self.filtered_entries();
+        let mut list = column![].spacing(6);
+        if self.entry_search_open {
+            list = list.push(entry_filters(self));
+        }
+        list = list.push(entry_header());
 
         if self.entries.is_empty() {
             list = list.push(
@@ -20,8 +27,14 @@ impl GuiApp {
                     .padding(12)
                     .width(Fill),
             );
+        } else if filtered_entries.is_empty() {
+            list = list.push(
+                container(text("No matching entries").size(16))
+                    .padding(12)
+                    .width(Fill),
+            );
         } else {
-            for entry in &self.entries {
+            for entry in filtered_entries {
                 list = list.push(entry_row(
                     entry,
                     &self.entries,
@@ -36,6 +49,52 @@ impl GuiApp {
             .height(Length::FillPortion(3))
             .into()
     }
+}
+
+fn entry_filters(app: &GuiApp) -> Element<'_, Message> {
+    let mut filters = row![
+        text_input(
+            "Search ID, name, expression, result...",
+            &app.entry_search_query
+        )
+        .id(ENTRY_SEARCH_INPUT_ID)
+        .on_input(Message::EntrySearchChanged)
+        .padding(8)
+        .size(15)
+        .width(Length::FillPortion(3)),
+        filter_button("All", EntryStateFilter::All, app.entry_state_filter),
+        filter_button("Values", EntryStateFilter::Values, app.entry_state_filter),
+        filter_button("Errors", EntryStateFilter::Errors, app.entry_state_filter),
+    ]
+    .spacing(8)
+    .align_y(iced::Center);
+
+    filters = filters.push(
+        button("Clear")
+            .padding([7, 10])
+            .style(|_, status| menu_button_style(status))
+            .on_press(Message::ClearEntrySearch),
+    );
+
+    filters.into()
+}
+
+fn filter_button(
+    label: &'static str,
+    filter: EntryStateFilter,
+    active_filter: EntryStateFilter,
+) -> Element<'static, Message> {
+    let label = if filter == active_filter {
+        format!("[{label}]")
+    } else {
+        label.to_string()
+    };
+
+    button(text(label))
+        .padding([7, 10])
+        .style(|_, status| menu_button_style(status))
+        .on_press(Message::EntryStateFilterChanged(filter))
+        .into()
 }
 
 fn entry_header() -> Element<'static, Message> {

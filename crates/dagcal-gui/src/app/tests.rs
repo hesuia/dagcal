@@ -166,6 +166,131 @@ fn status_bar_history_text_reflects_undo_and_redo_availability() {
 }
 
 #[test]
+fn entry_search_matches_displayed_id_name_expression_result_and_error_text() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("subtotal = 10".to_string());
+    app.submit_input();
+    app.input.set("$1 * 2".to_string());
+    app.submit_input();
+    app.input.set("1 / 0".to_string());
+    app.submit_input();
+
+    app.entry_search_changed("$3".to_string());
+    assert_eq!(filtered_entry_ids(&app), vec![ExpressionId::new(3)]);
+
+    app.entry_search_changed("subtotal".to_string());
+    assert_eq!(filtered_entry_ids(&app), vec![ExpressionId::new(1)]);
+
+    app.entry_search_changed("$1 * 2".to_string());
+    assert_eq!(filtered_entry_ids(&app), vec![ExpressionId::new(2)]);
+
+    app.entry_search_changed("20".to_string());
+    assert_eq!(filtered_entry_ids(&app), vec![ExpressionId::new(2)]);
+
+    app.entry_search_changed("error".to_string());
+    assert_eq!(filtered_entry_ids(&app), vec![ExpressionId::new(3)]);
+}
+
+#[test]
+fn entry_search_is_closed_by_default_and_opens_with_focus_effect() {
+    let (mut app, _) = GuiApp::new();
+
+    assert!(!app.entry_search_open);
+
+    let effect = app.open_entry_search();
+
+    assert!(app.entry_search_open);
+    assert_eq!(effect, super::effects::UiEffect::FocusEntrySearch);
+}
+
+#[test]
+fn ctrl_f_opens_entry_search() {
+    let (mut app, _) = GuiApp::new();
+
+    let effect = app.handle_keyboard_event(character_key_event("f", keyboard::Modifiers::CTRL));
+
+    assert!(app.entry_search_open);
+    assert_eq!(effect, super::effects::UiEffect::FocusEntrySearch);
+}
+
+#[test]
+fn entry_state_filter_returns_values_or_errors() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    app.input.set("1 / 0".to_string());
+    app.submit_input();
+
+    app.entry_state_filter_changed(EntryStateFilter::Values);
+    assert_eq!(filtered_entry_ids(&app), vec![ExpressionId::new(1)]);
+
+    app.entry_state_filter_changed(EntryStateFilter::Errors);
+    assert_eq!(filtered_entry_ids(&app), vec![ExpressionId::new(2)]);
+}
+
+#[test]
+fn entry_search_and_state_filter_combine() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("subtotal = 10".to_string());
+    app.submit_input();
+    app.input.set("subtotal / 0".to_string());
+    app.submit_input();
+
+    app.entry_search_changed("subtotal".to_string());
+    app.entry_state_filter_changed(EntryStateFilter::Errors);
+
+    assert_eq!(filtered_entry_ids(&app), vec![ExpressionId::new(2)]);
+}
+
+#[test]
+fn entry_count_status_reports_visible_and_total_when_filtered() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    app.input.set("20".to_string());
+    app.submit_input();
+
+    assert_eq!(app.entry_count_status_text(), "Entries: 2");
+
+    app.entry_search_changed("20".to_string());
+
+    assert_eq!(app.entry_count_status_text(), "Entries: 1 / 2");
+}
+
+#[test]
+fn clearing_entry_search_resets_query_and_state_filter() {
+    let (mut app, _) = GuiApp::new();
+    app.open_entry_search();
+    app.entry_search_changed("error".to_string());
+    app.entry_state_filter_changed(EntryStateFilter::Errors);
+
+    app.clear_entry_search();
+
+    assert!(!app.entry_search_open);
+    assert_eq!(app.entry_search_query, "");
+    assert_eq!(app.entry_state_filter, EntryStateFilter::All);
+}
+
+#[test]
+fn escape_closes_entry_search_after_completion_priority() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    app.open_entry_search();
+    app.entry_search_changed("10".to_string());
+
+    let _ = app.update(Message::InputChanged("$".to_string()));
+    app.handle_keyboard_event(named_key_event(key::Named::Escape));
+    assert!(app.entry_search_open);
+    assert_eq!(app.entry_search_query, "10");
+    assert!(!app.completion_is_open());
+
+    app.handle_keyboard_event(named_key_event(key::Named::Escape));
+    assert!(!app.entry_search_open);
+    assert_eq!(app.entry_search_query, "");
+}
+
+#[test]
 fn help_menu_messages_open_help_window() {
     let (mut app, _) = GuiApp::new();
 
@@ -391,6 +516,27 @@ fn arrow_navigation_at_edge_keeps_edit_active_when_selection_does_not_change() {
 }
 
 #[test]
+fn arrow_navigation_uses_visible_filtered_entries() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    app.input.set("20".to_string());
+    app.submit_input();
+    app.input.set("30".to_string());
+    app.submit_input();
+    app.input.clear();
+    app.selected = Some(ExpressionId::new(1));
+
+    app.entry_search_changed("20".to_string());
+    app.move_selection(SelectionDirection::Next);
+    assert_eq!(app.selected, Some(ExpressionId::new(2)));
+
+    app.selected = Some(ExpressionId::new(3));
+    app.move_selection(SelectionDirection::Previous);
+    assert_eq!(app.selected, Some(ExpressionId::new(2)));
+}
+
+#[test]
 fn arrow_navigation_is_disabled_while_selected_input_is_modified() {
     let (mut app, _) = GuiApp::new();
     app.input.set("10".to_string());
@@ -402,6 +548,24 @@ fn arrow_navigation_is_disabled_while_selected_input_is_modified() {
     app.input.set("draft".to_string());
     app.move_selection(SelectionDirection::Next);
     assert_eq!(app.selected, Some(ExpressionId::new(1)));
+    assert_eq!(app.input.source(), "draft");
+}
+
+#[test]
+fn keyboard_navigation_is_ignored_while_input_is_modified() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    app.input.set("20".to_string());
+    app.submit_input();
+
+    app.select_entry(ExpressionId::new(1));
+    app.input.set("draft".to_string());
+    app.handle_keyboard_event(named_key_event(key::Named::ArrowDown));
+    app.handle_keyboard_event(named_key_event(key::Named::Delete));
+
+    assert_eq!(app.selected, Some(ExpressionId::new(1)));
+    assert_eq!(app.entries.len(), 2);
     assert_eq!(app.input.source(), "draft");
 }
 
@@ -979,4 +1143,11 @@ fn named_key_event(named: key::Named) -> keyboard::Event {
         text: None,
         repeat: false,
     }
+}
+
+fn filtered_entry_ids(app: &GuiApp) -> Vec<ExpressionId> {
+    app.filtered_entries()
+        .into_iter()
+        .map(|entry| entry.id)
+        .collect()
 }

@@ -16,6 +16,7 @@ impl GuiApp {
         let menu_bar = MenuBar::new(vec![
             Item::with_menu(menu_button("File"), file_menu()),
             Item::with_menu(menu_button("Edit"), edit_menu()),
+            Item::with_menu(menu_button("View"), view_menu(self)),
             Item::with_menu(menu_button("Insert"), insert_menu(self)),
             Item::with_menu(menu_button("Help"), help_menu()),
         ])
@@ -61,6 +62,23 @@ fn edit_menu() -> Menu<'static, Message, iced::Theme, iced::Renderer> {
     .width(Length::Fixed(150.0))
     .max_width(180.0)
     .offset(3.0)
+}
+
+fn view_menu(app: &GuiApp) -> Menu<'static, Message, iced::Theme, iced::Renderer> {
+    let (label, message) = entry_search_menu_item(app.entry_search_open);
+
+    Menu::new(vec![Item::new(menu_item(label, message))])
+        .width(Length::Fixed(150.0))
+        .max_width(190.0)
+        .offset(3.0)
+}
+
+fn entry_search_menu_item(search_open: bool) -> (&'static str, Message) {
+    if search_open {
+        ("Hide Search", Message::ClearEntrySearch)
+    } else {
+        ("Show Search", Message::OpenEntrySearch)
+    }
 }
 
 fn insert_menu(app: &GuiApp) -> Menu<'static, Message, iced::Theme, iced::Renderer> {
@@ -213,5 +231,16 @@ mod tests {
         let constants = menu_entries_for_kind(engine.completion_items(), CompletionKind::Constant);
 
         assert!(constants.iter().all(|entry| entry.label != "x"));
+    }
+
+    #[test]
+    fn entry_search_menu_item_toggles_label_and_message() {
+        let (label, message) = entry_search_menu_item(false);
+        assert_eq!(label, "Show Search");
+        assert!(matches!(message, Message::OpenEntrySearch));
+
+        let (label, message) = entry_search_menu_item(true);
+        assert_eq!(label, "Hide Search");
+        assert!(matches!(message, Message::ClearEntrySearch));
     }
 }

@@ -69,7 +69,7 @@ impl GuiApp {
                 text(self.status.clone())
                     .size(13)
                     .width(Length::FillPortion(3)),
-                text(format!("Entries: {}", self.entries.len()))
+                text(self.entry_count_status_text())
                     .size(13)
                     .width(Length::FillPortion(1)),
                 text(self.file_status_text())
@@ -151,7 +151,7 @@ impl GuiApp {
         let (title, body) = match self.help_topic {
             crate::app::HelpTopic::KeyboardShortcuts => (
                 "Keyboard shortcuts",
-                "Ctrl+Z: Undo\nCtrl+Y: Redo\nDelete: Remove the selected entry\nArrow Up/Down: Move the selection when the input is empty",
+                "Ctrl+F: Search entries\nEsc: Close completion or entry search\nCtrl+Z: Undo\nCtrl+Y: Redo\nDelete: Remove the selected entry\nArrow Up/Down: Move the selection when the input is empty",
             ),
             crate::app::HelpTopic::About => (
                 "About dagcal",

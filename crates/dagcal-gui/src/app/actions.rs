@@ -1,14 +1,42 @@
 use super::effects::{ENTRIES_SCROLLABLE_ID, UiEffect};
-use super::{Confirmation, GuiApp, LoadResult, Message, SaveResult};
+use super::{Confirmation, EntryStateFilter, GuiApp, LoadResult, Message, SaveResult};
 use crate::app::completion::CompletionDirection;
 use crate::formatting::{entry_expression_source, entry_reference_token, state_summary};
-use dagcal_core::{Engine, EngineSnapshot, EntryView, ExpressionId};
+use dagcal_core::{Engine, EngineSnapshot, EntryState, EntryView, ExpressionId};
 use iced::Task;
 use iced::keyboard::{self, Key, key};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 impl GuiApp {
+    pub(super) fn open_entry_search(&mut self) -> UiEffect {
+        self.close_completions();
+        self.entry_search_open = true;
+        UiEffect::FocusEntrySearch
+    }
+
+    pub(super) fn close_entry_search(&mut self) -> UiEffect {
+        self.reset_entry_filters();
+        UiEffect::None
+    }
+
+    pub(super) fn entry_search_changed(&mut self, value: String) -> UiEffect {
+        self.entry_search_open = true;
+        self.entry_search_query = value;
+        UiEffect::None
+    }
+
+    pub(super) fn entry_state_filter_changed(&mut self, filter: EntryStateFilter) -> UiEffect {
+        self.entry_search_open = true;
+        self.entry_state_filter = filter;
+        UiEffect::None
+    }
+
+    pub(super) fn clear_entry_search(&mut self) -> UiEffect {
+        self.reset_entry_filters();
+        UiEffect::None
+    }
+
     pub(super) fn input_changed(&mut self, value: String) -> UiEffect {
         self.input.set(value);
         self.refresh_completions();
@@ -224,24 +252,43 @@ impl GuiApp {
                 ..
             } if self.completion_is_open() => self.close_completions(),
             keyboard::Event::KeyPressed {
+                key: Key::Named(key::Named::Escape),
+                ..
+            } if self.entry_search_open => {
+                self.close_entry_search();
+            }
+            keyboard::Event::KeyPressed { key, modifiers, .. }
+                if modifiers.control() && is_character_key(&key, "f") =>
+            {
+                return self.open_entry_search();
+            }
+            keyboard::Event::KeyPressed {
                 key: Key::Named(key::Named::ArrowUp),
                 ..
-            } => self.move_selection(SelectionDirection::Previous),
+            } if self.selection_navigation_enabled() => {
+                self.move_selection(SelectionDirection::Previous)
+            }
             keyboard::Event::KeyPressed {
                 key: Key::Named(key::Named::ArrowDown),
                 ..
-            } => self.move_selection(SelectionDirection::Next),
+            } if self.selection_navigation_enabled() => {
+                self.move_selection(SelectionDirection::Next)
+            }
             keyboard::Event::KeyPressed {
                 key: Key::Named(key::Named::Delete),
                 ..
-            } => self.delete_selected_entry(),
+            } if self.selection_navigation_enabled() => self.delete_selected_entry(),
             keyboard::Event::KeyPressed { key, modifiers, .. }
-                if modifiers.control() && is_character_key(&key, "z") =>
+                if self.selection_navigation_enabled()
+                    && modifiers.control()
+                    && is_character_key(&key, "z") =>
             {
                 self.undo();
             }
             keyboard::Event::KeyPressed { key, modifiers, .. }
-                if modifiers.control() && is_character_key(&key, "y") =>
+                if self.selection_navigation_enabled()
+                    && modifiers.control()
+                    && is_character_key(&key, "y") =>
             {
                 self.redo();
             }
@@ -269,6 +316,7 @@ impl GuiApp {
         self.draft_entry = None;
         self.selected = None;
         self.hovered_entry = None;
+        self.reset_entry_filters();
         self.status = "Cleared".to_string();
         UiEffect::None
     }
@@ -434,14 +482,18 @@ impl GuiApp {
             return Task::none();
         };
 
-        let Some(index) = self.entries.iter().position(|entry| entry.id == selected) else {
+        let visible_entries = self.filtered_entries();
+        let Some(index) = visible_entries
+            .iter()
+            .position(|entry| entry.id == selected)
+        else {
             return Task::none();
         };
 
-        let y = if self.entries.len() <= 1 {
+        let y = if visible_entries.len() <= 1 {
             0.0
         } else {
-            index as f32 / (self.entries.len() - 1) as f32
+            index as f32 / (visible_entries.len() - 1) as f32
         };
 
         iced::widget::operation::snap_to(
@@ -479,25 +531,30 @@ impl GuiApp {
     }
 
     pub(super) fn move_selection(&mut self, direction: SelectionDirection) {
-        if !self.selection_navigation_enabled() || self.entries.is_empty() {
+        if !self.selection_navigation_enabled() {
+            return;
+        }
+
+        let visible_entries = self.filtered_entries();
+        if visible_entries.is_empty() {
             return;
         }
 
         let next_index = match self
             .selected
-            .and_then(|id| self.entries.iter().position(|entry| entry.id == id))
+            .and_then(|id| visible_entries.iter().position(|entry| entry.id == id))
         {
             Some(index) => match direction {
                 SelectionDirection::Previous => index.saturating_sub(1),
-                SelectionDirection::Next => (index + 1).min(self.entries.len() - 1),
+                SelectionDirection::Next => (index + 1).min(visible_entries.len() - 1),
             },
             None => match direction {
-                SelectionDirection::Previous => self.entries.len() - 1,
+                SelectionDirection::Previous => visible_entries.len() - 1,
                 SelectionDirection::Next => 0,
             },
         };
 
-        self.set_selected_entry(self.entries[next_index].id);
+        self.set_selected_entry(visible_entries[next_index].id);
     }
 
     fn set_selected_entry(&mut self, id: ExpressionId) {
@@ -619,8 +676,57 @@ impl GuiApp {
         self.editing = None;
         self.draft_entry = None;
         self.hovered_entry = None;
+        self.reset_entry_filters();
         self.selected = self.entries.last().map(|entry| entry.id);
         self.status = status.to_string();
+    }
+
+    pub(crate) fn filtered_entries(&self) -> Vec<&EntryView> {
+        self.entries
+            .iter()
+            .filter(|entry| self.entry_matches_filters(entry))
+            .collect()
+    }
+
+    pub(crate) fn filters_are_active(&self) -> bool {
+        !self.entry_search_query.trim().is_empty()
+            || self.entry_state_filter != EntryStateFilter::All
+    }
+
+    pub(crate) fn entry_count_status_text(&self) -> String {
+        let visible_count = self.filtered_entries().len();
+        if self.filters_are_active() {
+            format!("Entries: {visible_count} / {}", self.entries.len())
+        } else {
+            format!("Entries: {}", self.entries.len())
+        }
+    }
+
+    fn entry_matches_filters(&self, entry: &EntryView) -> bool {
+        if !self.entry_matches_state_filter(entry) {
+            return false;
+        }
+
+        let query = self.entry_search_query.trim();
+        if query.is_empty() {
+            return true;
+        }
+
+        entry_search_text(entry).contains(&query.to_lowercase())
+    }
+
+    fn entry_matches_state_filter(&self, entry: &EntryView) -> bool {
+        match self.entry_state_filter {
+            EntryStateFilter::All => true,
+            EntryStateFilter::Values => matches!(entry.state, EntryState::Value(_)),
+            EntryStateFilter::Errors => matches!(entry.state, EntryState::Error(_)),
+        }
+    }
+
+    fn reset_entry_filters(&mut self) {
+        self.entry_search_open = false;
+        self.entry_search_query.clear();
+        self.entry_state_filter = EntryStateFilter::All;
     }
 }
 
@@ -637,6 +743,14 @@ enum SelectionStatus {
 
 fn unavailable_status(id: ExpressionId) -> String {
     format!("{id} is not available")
+}
+
+fn entry_search_text(entry: &EntryView) -> String {
+    let expression = entry_expression_source(entry);
+    let state = state_summary(&entry.state);
+    let name = entry.name.as_deref().unwrap_or_default();
+
+    format!("{} {name} {expression} {} {state}", entry.id, entry.source).to_lowercase()
 }
 
 fn is_character_key(key: &Key, expected: &str) -> bool {

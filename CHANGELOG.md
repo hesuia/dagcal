@@ -6,6 +6,10 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- GUI: Added entry search and All/Values/Errors filtering for the entries table.
+- GUI: Show entry search controls only while searching, with View menu, Ctrl+F, Clear, and Esc controls.
+
 ## [0.3.0] - 2026-07-02
 
 ### Added

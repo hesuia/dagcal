@@ -7,7 +7,7 @@ mod effects;
 mod tests;
 
 pub(crate) use draft::Draft;
-pub(crate) use effects::{ENTRIES_SCROLLABLE_ID, EXPRESSION_INPUT_ID};
+pub(crate) use effects::{ENTRIES_SCROLLABLE_ID, ENTRY_SEARCH_INPUT_ID, EXPRESSION_INPUT_ID};
 
 use self::completion::CompletionState;
 use dagcal_core::{Engine, EngineSnapshot, EntryView, ExpressionId};
@@ -17,6 +17,10 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub enum Message {
     InputChanged(String),
+    OpenEntrySearch,
+    EntrySearchChanged(String),
+    EntryStateFilterChanged(EntryStateFilter),
+    ClearEntrySearch,
     Submit,
     NewEntry,
     Edit(ExpressionId),
@@ -73,6 +77,9 @@ pub struct GuiApp {
     pub(crate) help_topic: HelpTopic,
     pub(crate) engine: Engine,
     pub(crate) entries: Vec<EntryView>,
+    pub(crate) entry_search_open: bool,
+    pub(crate) entry_search_query: String,
+    pub(crate) entry_state_filter: EntryStateFilter,
     pub(crate) input: Draft,
     pub(crate) editing: Option<ExpressionId>,
     pub(crate) draft_entry: Option<ExpressionId>,
@@ -89,6 +96,13 @@ pub struct GuiApp {
 pub(crate) enum HelpTopic {
     KeyboardShortcuts,
     About,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EntryStateFilter {
+    All,
+    Values,
+    Errors,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +134,9 @@ impl GuiApp {
                 help_topic: HelpTopic::KeyboardShortcuts,
                 engine,
                 entries: Vec::new(),
+                entry_search_open: false,
+                entry_search_query: String::new(),
+                entry_state_filter: EntryStateFilter::All,
                 input: Draft::default(),
                 editing: None,
                 draft_entry: None,
@@ -138,6 +155,10 @@ impl GuiApp {
     pub(crate) fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::InputChanged(value) => self.input_changed(value),
+            Message::OpenEntrySearch => self.open_entry_search(),
+            Message::EntrySearchChanged(value) => self.entry_search_changed(value),
+            Message::EntryStateFilterChanged(filter) => self.entry_state_filter_changed(filter),
+            Message::ClearEntrySearch => self.clear_entry_search(),
             Message::Submit => self.submit_input(),
             Message::NewEntry => self.start_new_entry(),
             Message::Edit(id) => self.start_edit(id),
