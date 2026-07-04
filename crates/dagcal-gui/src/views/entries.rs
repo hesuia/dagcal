@@ -4,7 +4,7 @@ use crate::style::{
     TABLE_TEXT_SIZE, context_menu_item_style, context_menu_panel_style, menu_button_style,
     row_container_style, warning_color,
 };
-use dagcal_core::{EntryState, EntryView, ExpressionId};
+use dagcal_app::{EntryState, EntryView, ExpressionId};
 use iced::widget::text::Wrapping;
 use iced::widget::{
     button, column, container, mouse_area, rich_text, row, scrollable, text, text_input,

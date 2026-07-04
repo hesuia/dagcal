@@ -906,6 +906,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
+name = "dagcal-app"
+version = "0.3.0"
+dependencies = [
+ "dagcal-core",
+]
+
+[[package]]
 name = "dagcal-core"
 version = "0.3.0"
 dependencies = [
@@ -925,7 +932,7 @@ dependencies = [
 name = "dagcal-gui"
 version = "0.3.0"
 dependencies = [
- "dagcal-core",
+ "dagcal-app",
  "iced",
  "iced_aw",
  "rfd",
@@ -944,7 +951,7 @@ name = "dagcal-tui"
 version = "0.3.0"
 dependencies = [
  "crossterm",
- "dagcal-core",
+ "dagcal-app",
  "ratatui",
 ]
 

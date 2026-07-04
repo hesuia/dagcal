@@ -9,6 +9,7 @@ readme = "README.md"
 
 [workspace]
 members = [
+    "crates/dagcal-app",
     "crates/dagcal-core",
     "crates/dagcal-gui",
     "crates/dagcal-repl",

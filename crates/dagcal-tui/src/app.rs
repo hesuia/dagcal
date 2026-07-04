@@ -1,5 +1,4 @@
-use dagcal_core::{Engine, EntryState, EntryView, ExpressionId};
-use std::collections::BTreeSet;
+use dagcal_app::{AppSession, EntryState, EntryView, ExpressionId, SelectionDirection, formatting};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -9,12 +8,8 @@ pub enum Mode {
 }
 
 pub struct App {
-    engine: Engine,
-    entries: Vec<EntryView>,
-    selected: usize,
+    session: AppSession,
     mode: Mode,
-    input: String,
-    status: String,
     should_quit: bool,
 }
 
@@ -26,24 +21,25 @@ impl Default for App {
 
 impl App {
     pub fn new() -> Self {
+        let mut session = AppSession::new();
+        session.status =
+            "i: insert  e: edit  d: delete  u: undo  r: redo  c: clear  q: quit".to_string();
         Self {
-            engine: Engine::new(),
-            entries: Vec::new(),
-            selected: 0,
+            session,
             mode: Mode::Normal,
-            input: String::new(),
-            status: "i: insert  e: edit  d: delete  u: undo  r: redo  c: clear  q: quit"
-                .to_string(),
             should_quit: false,
         }
     }
 
     pub fn entries(&self) -> Vec<EntryView> {
-        self.entries.clone()
+        self.session.entries.clone()
     }
 
     pub fn selected(&self) -> usize {
-        self.selected
+        self.session
+            .selected
+            .and_then(|id| self.session.entries.iter().position(|entry| entry.id == id))
+            .unwrap_or(0)
     }
 
     pub fn mode(&self) -> Mode {
@@ -51,11 +47,11 @@ impl App {
     }
 
     pub fn input(&self) -> &str {
-        &self.input
+        self.session.input.source()
     }
 
     pub fn status(&self) -> &str {
-        &self.status
+        &self.session.status
     }
 
     pub fn should_quit(&self) -> bool {
@@ -67,47 +63,51 @@ impl App {
     }
 
     pub fn move_next(&mut self) {
-        let len = self.entries.len();
-        if len > 0 {
-            self.selected = (self.selected + 1).min(len - 1);
-        }
+        self.session.move_selection(SelectionDirection::Next);
     }
 
     pub fn move_previous(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
+        self.session.move_selection(SelectionDirection::Previous);
     }
 
     pub fn start_insert(&mut self) {
         self.mode = Mode::Insert;
-        self.input.clear();
-        self.status = "enter expression".to_string();
+        self.session.input.clear();
+        self.session.editing = None;
+        self.session.status = "enter expression".to_string();
     }
 
     pub fn start_edit(&mut self) {
         if let Some(entry) = self.selected_entry() {
             self.mode = Mode::Edit;
-            self.input = entry.source;
-            self.status = format!("editing {}", entry.id);
+            self.session.editing = Some(entry.id);
+            self.session.input.load_selection(entry.source);
+            self.session.status = format!("editing {}", entry.id);
         } else {
-            self.status = "no entry selected".to_string();
+            self.session.status = "no entry selected".to_string();
         }
     }
 
     pub fn cancel_input(&mut self) {
         self.mode = Mode::Normal;
-        self.input.clear();
-        self.status = "cancelled".to_string();
+        self.session.input.clear();
+        self.session.editing = None;
+        self.session.status = "cancelled".to_string();
     }
 
     pub fn push_input(&mut self, ch: char) {
         if self.mode != Mode::Normal {
-            self.input.push(ch);
+            let mut source = self.session.input.source().to_string();
+            source.push(ch);
+            self.session.input.set(source);
         }
     }
 
     pub fn backspace_input(&mut self) {
         if self.mode != Mode::Normal {
-            self.input.pop();
+            let mut source = self.session.input.source().to_string();
+            source.pop();
+            self.session.input.set(source);
         }
     }
 
@@ -121,150 +121,88 @@ impl App {
 
     pub fn delete_selected(&mut self) {
         let Some(id) = self.selected_id() else {
-            self.status = "no entry selected".to_string();
+            self.session.status = "no entry selected".to_string();
             return;
         };
 
-        if let Some(removal) = self.engine.remove_entry_by_id(id) {
-            self.entries
-                .retain(|entry| entry.id != removal.removed_entry.id);
-            self.refresh_affected(&removal.affected_ids);
-        }
-        self.clamp_selection();
-        self.status = format!("removed {id}");
+        self.session.delete_entry(id);
     }
 
     pub fn clear(&mut self) {
-        self.engine.clear();
-        self.refresh_cache();
+        self.session.clear();
         self.mode = Mode::Normal;
-        self.input.clear();
-        self.status = "cleared".to_string();
+        self.session.status = "cleared".to_string();
     }
 
     pub fn undo(&mut self) {
-        if self.engine.undo() {
-            self.refresh_cache();
-            self.mode = Mode::Normal;
-            self.input.clear();
-            self.status = "undone".to_string();
-        } else {
-            self.status = "nothing to undo".to_string();
+        self.session.undo();
+        self.mode = Mode::Normal;
+        if self.session.status == "Undone" {
+            self.session.status = "undone".to_string();
+        } else if self.session.status == "Nothing to undo" {
+            self.session.status = "nothing to undo".to_string();
         }
     }
 
     pub fn redo(&mut self) {
-        if self.engine.redo() {
-            self.refresh_cache();
-            self.mode = Mode::Normal;
-            self.input.clear();
-            self.status = "redone".to_string();
-        } else {
-            self.status = "nothing to redo".to_string();
+        self.session.redo();
+        self.mode = Mode::Normal;
+        if self.session.status == "Redone" {
+            self.session.status = "redone".to_string();
+        } else if self.session.status == "Nothing to redo" {
+            self.session.status = "nothing to redo".to_string();
         }
     }
 
     fn submit_insert(&mut self) {
-        let source = self.input.trim().to_string();
-        if source.is_empty() {
-            self.status = "empty expression".to_string();
+        if self.session.input.source().trim().is_empty() {
+            self.session.status = "empty expression".to_string();
             return;
         }
 
-        let execution = self.engine.execute(&source);
-        self.refresh_affected(&execution.affected_ids);
-        self.select_id(execution.id);
-        self.status = format!("{} = {}", execution.id, state_summary(&execution.state));
+        self.session.submit_input();
         self.finish_input();
     }
 
     fn submit_edit(&mut self) {
-        let Some(id) = self.selected_id() else {
-            self.status = "no entry selected".to_string();
+        if self.session.editing.is_none() {
+            self.session.status = "no entry selected".to_string();
             self.finish_input();
             return;
-        };
+        }
 
-        let source = self.input.trim().to_string();
-        if source.is_empty() {
-            self.status = "empty expression".to_string();
+        if self.session.input.source().trim().is_empty() {
+            self.session.status = "empty expression".to_string();
             return;
         }
 
-        let result = self.engine.set_statement_by_id(id, source);
-        self.refresh_affected(&result.execution.affected_ids);
-        let id = result.execution.id;
-        self.select_id(id);
-        if let Some(entry) = self.engine.entry_by_id(id) {
-            self.status = format!("{id} = {}", state_summary(&entry.state));
-        }
+        self.session.submit_input();
         self.finish_input();
     }
 
     fn finish_input(&mut self) {
         self.mode = Mode::Normal;
-        self.input.clear();
+        self.session.input.clear();
+        self.session.editing = None;
     }
 
     fn selected_entry(&self) -> Option<EntryView> {
-        self.entries.get(self.selected).cloned()
+        self.session.entries.get(self.selected()).cloned()
     }
 
     fn selected_id(&self) -> Option<ExpressionId> {
         self.selected_entry().map(|entry| entry.id)
     }
-
-    fn select_id(&mut self, id: ExpressionId) {
-        if let Some(index) = self.entries.iter().position(|entry| entry.id == id) {
-            self.selected = index;
-        }
-    }
-
-    fn clamp_selection(&mut self) {
-        let len = self.entries.len();
-        if len == 0 {
-            self.selected = 0;
-        } else {
-            self.selected = self.selected.min(len - 1);
-        }
-    }
-
-    fn refresh_affected(&mut self, ids: &BTreeSet<ExpressionId>) {
-        for id in ids {
-            match self.engine.entry_by_id(*id) {
-                Some(entry) => self.upsert_cached_entry(entry),
-                None => self.entries.retain(|entry| entry.id != *id),
-            }
-        }
-    }
-
-    fn upsert_cached_entry(&mut self, entry: EntryView) {
-        match self
-            .entries
-            .binary_search_by_key(&entry.id, |entry| entry.id)
-        {
-            Ok(index) => self.entries[index] = entry,
-            Err(index) => self.entries.insert(index, entry),
-        }
-    }
-
-    fn refresh_cache(&mut self) {
-        self.entries = self.engine.entries();
-        self.clamp_selection();
-    }
 }
 
 pub fn state_summary(state: &EntryState) -> String {
-    match state {
-        EntryState::Value(value) => value.to_string(),
-        EntryState::Error(err) => format!("error: {err}"),
-    }
+    formatting::state_summary(state)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dagcal_core::Number;
+    use dagcal_app::Number;
 
     #[test]
     fn insert_adds_entries_and_selects_the_latest_result() {
@@ -294,14 +232,14 @@ mod tests {
     #[test]
     fn edit_updates_selected_source_and_recomputes_dependents() {
         let mut app = App::new();
-        app.engine.execute("subtotal = 100");
-        app.engine.execute("subtotal * 2");
-        app.refresh_cache();
+        app.session.engine.execute("subtotal = 100");
+        app.session.engine.execute("subtotal * 2");
+        app.session.entries = app.session.engine.entries();
+        app.session.selected = Some(ExpressionId::new(1));
 
-        app.move_previous();
         app.start_edit();
         assert_eq!(app.input(), "100");
-        app.input.clear();
+        app.session.input.clear();
         for ch in "120".chars() {
             app.push_input(ch);
         }
@@ -315,11 +253,12 @@ mod tests {
     #[test]
     fn edit_keeps_invalid_source_as_error_entry() {
         let mut app = App::new();
-        app.engine.execute("10");
-        app.refresh_cache();
+        app.session.engine.execute("10");
+        app.session.entries = app.session.engine.entries();
+        app.session.selected = Some(ExpressionId::new(1));
 
         app.start_edit();
-        app.input.clear();
+        app.session.input.clear();
         for ch in "1 +".chars() {
             app.push_input(ch);
         }
@@ -352,9 +291,10 @@ mod tests {
     #[test]
     fn delete_preserves_later_ids() {
         let mut app = App::new();
-        app.engine.execute("10");
-        app.engine.execute("20");
-        app.refresh_cache();
+        app.session.engine.execute("10");
+        app.session.engine.execute("20");
+        app.session.entries = app.session.engine.entries();
+        app.session.selected = Some(ExpressionId::new(1));
         app.delete_selected();
 
         let entries = app.entries();

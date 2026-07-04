@@ -1,15 +1,12 @@
 [package]
-name = "dagcal-tui"
+name = "dagcal-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 readme.workspace = true
-description = "Terminal user interface frontend for dagcal"
-publish = false
+description = "Shared UI-agnostic application state for dagcal frontends"
 
 [dependencies]
-crossterm = "0.28"
-dagcal-app = { path = "../dagcal-app" }
-ratatui = "0.29"
+dagcal-core = { path = "../dagcal-core" }

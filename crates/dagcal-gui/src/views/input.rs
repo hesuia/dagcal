@@ -3,7 +3,7 @@ use crate::formatting::resolved_source;
 use crate::style::{
     DETAIL_HEIGHT, completion_item_style, completion_panel_style, fixed_scroll_text,
 };
-use dagcal_core::CompletionKind;
+use dagcal_app::CompletionKind;
 use iced::widget::{button, column, container, row, text, text_input};
 use iced::{Element, Fill, Length};
 use iced_aw::{DropDown, drop_down};

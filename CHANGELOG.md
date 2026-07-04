@@ -7,10 +7,12 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- Added a shared `dagcal-app` crate for UI-agnostic app session state, draft input, completion, filtering, and display formatting used by frontends.
 - GUI: Added entry search and All/Values/Errors filtering for the entries table.
 - GUI: Show entry search controls only while searching, with View menu, Ctrl+F, Clear, and Esc controls.
 
 ### Changed
+- GUI/TUI: Route shared entry operations and frontend-facing state through `dagcal-app`.
 - GUI: Show discard-confirmation prompts in a separate window instead of inline in the main window.
 - GUI: Remove the confirmation prompt when deleting entries.
 

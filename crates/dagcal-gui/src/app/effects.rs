@@ -24,6 +24,17 @@ impl UiEffect {
     }
 }
 
+impl From<dagcal_app::SessionChange> for UiEffect {
+    fn from(change: dagcal_app::SessionChange) -> Self {
+        match change {
+            dagcal_app::SessionChange::None => Self::None,
+            dagcal_app::SessionChange::FocusInput => Self::FocusInput,
+            dagcal_app::SessionChange::FocusEntrySearch => Self::FocusEntrySearch,
+            dagcal_app::SessionChange::ScrollToSelection => Self::ScrollToSelection,
+        }
+    }
+}
+
 pub(super) fn subscription(_app: &GuiApp) -> Subscription<Message> {
     let right_clicks = event::listen_with(|event, _status, window| match event {
         iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {

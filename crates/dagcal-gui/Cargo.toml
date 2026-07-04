@@ -10,7 +10,7 @@ description = "Graphical user interface frontend for dagcal"
 publish = false
 
 [dependencies]
-dagcal-core = { path = "../dagcal-core" }
+dagcal-app = { path = "../dagcal-app" }
 iced = "0.14.0"
 iced_aw = "0.14.1"
 rfd = "0.15"

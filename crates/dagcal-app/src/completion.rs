@@ -1,120 +1,30 @@
-use dagcal_core::{CompletionItem, CompletionKind};
-
-use super::GuiApp;
+use crate::{CompletionItem, CompletionKind, Draft, Engine, SessionChange};
 
 const MAX_COMPLETIONS: usize = 8;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct CompletionState {
+pub struct CompletionState {
     token_range: Option<CompletionToken>,
     items: Vec<CompletionCandidate>,
     selected: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CompletionToken {
-    start: usize,
-    end: usize,
+pub struct CompletionToken {
+    pub start: usize,
+    pub end: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CompletionCandidate {
-    pub(crate) label: String,
-    pub(crate) detail: Option<String>,
-    pub(crate) insert: String,
-    pub(crate) kind: CompletionKind,
-}
-
-impl GuiApp {
-    pub(crate) fn completion_candidates(&self) -> &[CompletionCandidate] {
-        self.completion.items()
-    }
-
-    pub(crate) fn selected_completion_index(&self) -> Option<usize> {
-        self.completion.selected_index()
-    }
-
-    pub(crate) fn completion_is_open(&self) -> bool {
-        self.completion.is_open()
-    }
-
-    pub(super) fn refresh_completions(&mut self) {
-        self.completion =
-            CompletionState::for_source(self.input.source(), self.engine.completion_items());
-    }
-
-    pub(super) fn close_completions(&mut self) {
-        self.completion.clear();
-    }
-
-    pub(super) fn move_completion_selection(&mut self, direction: CompletionDirection) {
-        self.completion.move_selection(direction);
-    }
-
-    pub(super) fn accept_selected_completion(&mut self) -> bool {
-        let Some((range, candidate)) = self.completion.selected_candidate() else {
-            return false;
-        };
-
-        self.input
-            .replace_range(range.start..range.end, &candidate.insert);
-        self.close_completions();
-        self.ensure_empty_draft_entry();
-        self.status = format!("Inserted {}", candidate.insert);
-        true
-    }
-
-    pub(super) fn accept_completion(&mut self, index: usize) {
-        if self.completion.select(index) {
-            self.accept_selected_completion();
-        }
-    }
+pub struct CompletionCandidate {
+    pub label: String,
+    pub detail: Option<String>,
+    pub insert: String,
+    pub kind: CompletionKind,
 }
 
 impl CompletionState {
-    fn items(&self) -> &[CompletionCandidate] {
-        &self.items
-    }
-
-    fn is_open(&self) -> bool {
-        !self.items.is_empty()
-    }
-
-    fn selected_index(&self) -> Option<usize> {
-        self.is_open().then_some(self.selected)
-    }
-
-    fn clear(&mut self) {
-        self.token_range = None;
-        self.items.clear();
-        self.selected = 0;
-    }
-
-    fn select(&mut self, index: usize) -> bool {
-        if index >= self.items.len() {
-            return false;
-        }
-
-        self.selected = index;
-        true
-    }
-
-    fn move_selection(&mut self, direction: CompletionDirection) {
-        if self.items.is_empty() {
-            return;
-        }
-
-        self.selected = match direction {
-            CompletionDirection::Previous => self.selected.saturating_sub(1),
-            CompletionDirection::Next => (self.selected + 1).min(self.items.len() - 1),
-        };
-    }
-
-    fn selected_candidate(&self) -> Option<(CompletionToken, CompletionCandidate)> {
-        Some((self.token_range?, self.items.get(self.selected)?.clone()))
-    }
-
-    fn for_source(source: &str, items: Vec<CompletionItem>) -> Self {
+    pub fn for_source(source: &str, items: Vec<CompletionItem>) -> Self {
         let Some(token) = completion_token(source) else {
             return Self::default();
         };
@@ -137,10 +47,63 @@ impl CompletionState {
             }
         }
     }
+
+    pub fn refresh(&mut self, source: &str, items: Vec<CompletionItem>) {
+        *self = Self::for_source(source, items);
+    }
+
+    pub fn items(&self) -> &[CompletionCandidate] {
+        &self.items
+    }
+
+    pub fn is_open(&self) -> bool {
+        !self.items.is_empty()
+    }
+
+    pub fn selected_index(&self) -> Option<usize> {
+        self.is_open().then_some(self.selected)
+    }
+
+    pub fn clear(&mut self) {
+        self.token_range = None;
+        self.items.clear();
+        self.selected = 0;
+    }
+
+    pub fn select(&mut self, index: usize) -> bool {
+        if index >= self.items.len() {
+            return false;
+        }
+
+        self.selected = index;
+        true
+    }
+
+    pub fn move_selection(&mut self, direction: CompletionDirection) {
+        if self.items.is_empty() {
+            return;
+        }
+
+        self.selected = match direction {
+            CompletionDirection::Previous => self.selected.saturating_sub(1),
+            CompletionDirection::Next => (self.selected + 1).min(self.items.len() - 1),
+        };
+    }
+
+    pub fn selected_candidate(&self) -> Option<(CompletionToken, CompletionCandidate)> {
+        Some((self.token_range?, self.items.get(self.selected)?.clone()))
+    }
+
+    pub fn accept_selected(&mut self, draft: &mut Draft) -> Option<String> {
+        let (range, candidate) = self.selected_candidate()?;
+        draft.replace_range(range.start..range.end, &candidate.insert);
+        self.clear();
+        Some(candidate.insert)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum CompletionDirection {
+pub enum CompletionDirection {
     Previous,
     Next,
 }
@@ -205,10 +168,27 @@ fn completion_candidate(item: CompletionItem) -> CompletionCandidate {
     }
 }
 
+pub(crate) fn refresh_completion_state(
+    completion: &mut CompletionState,
+    input: &Draft,
+    engine: &Engine,
+) {
+    completion.refresh(input.source(), engine.completion_items());
+}
+
+pub(crate) fn accept_selected_completion(
+    completion: &mut CompletionState,
+    input: &mut Draft,
+    status: &mut String,
+) -> Option<SessionChange> {
+    let insert = completion.accept_selected(input)?;
+    *status = format!("Inserted {insert}");
+    Some(SessionChange::FocusInput)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dagcal_core::Engine;
 
     #[test]
     fn completion_state_finds_named_entries_from_suffix() {

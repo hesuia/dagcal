@@ -1,17 +1,15 @@
 mod actions;
-mod completion;
-mod draft;
 mod effects;
 
 #[cfg(test)]
 mod tests;
 
-pub(crate) use draft::Draft;
+pub(crate) use dagcal_app::EntryStateFilter;
 pub(crate) use effects::{ENTRIES_SCROLLABLE_ID, ENTRY_SEARCH_INPUT_ID, EXPRESSION_INPUT_ID};
 
-use self::completion::CompletionState;
-use dagcal_core::{Engine, EngineSnapshot, EntryView, ExpressionId};
+use dagcal_app::{AppSession, EngineSnapshot, ExpressionId};
 use iced::{Size, Subscription, Task, keyboard, window};
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -76,18 +74,7 @@ pub struct GuiApp {
     pub(crate) confirmation_window: Option<window::Id>,
     pub(crate) details_target: Option<ExpressionId>,
     pub(crate) help_topic: HelpTopic,
-    pub(crate) engine: Engine,
-    pub(crate) entries: Vec<EntryView>,
-    pub(crate) entry_search_open: bool,
-    pub(crate) entry_search_query: String,
-    pub(crate) entry_state_filter: EntryStateFilter,
-    pub(crate) input: Draft,
-    pub(crate) editing: Option<ExpressionId>,
-    pub(crate) draft_entry: Option<ExpressionId>,
-    pub(crate) selected: Option<ExpressionId>,
-    pub(crate) hovered_entry: Option<ExpressionId>,
-    pub(crate) status: String,
-    pub(crate) completion: CompletionState,
+    pub(crate) session: AppSession,
     pub(crate) current_path: Option<PathBuf>,
     pub(crate) saved_snapshot: EngineSnapshot,
     pub(crate) pending_confirmation: Option<Confirmation>,
@@ -97,13 +84,6 @@ pub struct GuiApp {
 pub(crate) enum HelpTopic {
     KeyboardShortcuts,
     About,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EntryStateFilter {
-    All,
-    Values,
-    Errors,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,8 +102,8 @@ impl GuiApp {
             ..window::Settings::default()
         });
 
-        let engine = Engine::new();
-        let saved_snapshot = engine.snapshot();
+        let session = AppSession::new();
+        let saved_snapshot = session.snapshot();
 
         (
             Self {
@@ -133,18 +113,7 @@ impl GuiApp {
                 confirmation_window: None,
                 details_target: None,
                 help_topic: HelpTopic::KeyboardShortcuts,
-                engine,
-                entries: Vec::new(),
-                entry_search_open: false,
-                entry_search_query: String::new(),
-                entry_state_filter: EntryStateFilter::All,
-                input: Draft::default(),
-                editing: None,
-                draft_entry: None,
-                selected: None,
-                hovered_entry: None,
-                status: "Ready".to_string(),
-                completion: CompletionState::default(),
+                session,
                 current_path: None,
                 saved_snapshot,
                 pending_confirmation: None,
@@ -212,6 +181,20 @@ impl GuiApp {
 
     pub(crate) fn subscription(&self) -> Subscription<Message> {
         effects::subscription(self)
+    }
+}
+
+impl Deref for GuiApp {
+    type Target = AppSession;
+
+    fn deref(&self) -> &Self::Target {
+        &self.session
+    }
+}
+
+impl DerefMut for GuiApp {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.session
     }
 }
 

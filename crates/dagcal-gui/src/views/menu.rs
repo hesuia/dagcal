@@ -1,6 +1,6 @@
 use crate::app::{GuiApp, Message};
 use crate::style::{menu_bar_style, menu_button_style};
-use dagcal_core::{CompletionItem, CompletionKind};
+use dagcal_app::{CompletionItem, CompletionKind};
 use iced::widget::{button, container, row, text};
 use iced::{Element, Fill, Length};
 use iced_aw::menu::{Item, Menu, MenuBar};
@@ -197,7 +197,7 @@ fn inert_menu_item(label: &'static str) -> Element<'static, Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dagcal_core::Engine;
+    use dagcal_app::Engine;
 
     #[test]
     fn menu_entries_collect_runtime_constants() {

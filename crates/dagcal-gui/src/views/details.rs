@@ -1,7 +1,5 @@
 use crate::app::{GuiApp, Message};
-use crate::formatting::{entry_expression_source, entry_set_summary};
 use crate::style::{DETAIL_HEIGHT, fixed_line, fixed_scroll_text};
-use dagcal_core::{EntryState, EntryView, ExpressionId};
 use iced::widget::{button, column, container, row, scrollable, text};
 use iced::{Element, Fill, Length, window};
 
@@ -32,42 +30,6 @@ impl GuiApp {
         .spacing(12)
         .align_y(iced::Center)
         .into()
-    }
-
-    pub(super) fn selected_summary_text(&self, id: ExpressionId, entry: &EntryView) -> String {
-        let dependencies = self.engine.dependencies_of(id);
-        let dependents = self.engine.dependents_of(id);
-        let expression = entry_expression_source(entry);
-        let result = selected_result_summary(&entry.state, self.draft_entry == Some(id));
-
-        format!(
-            "{id}  Expression: {expression}\n{result}\nDepends on: {}    Used by: {}",
-            entry_set_summary(&dependencies, &self.entries),
-            entry_set_summary(&dependents, &self.entries)
-        )
-    }
-
-    pub(super) fn selected_error_text(&self, entry: &EntryView) -> String {
-        if self.draft_entry == Some(entry.id) {
-            return "Error detail: none".to_string();
-        }
-
-        match &entry.state {
-            EntryState::Value(_) => "Error detail: none".to_string(),
-            EntryState::Error(err) => format!("Error detail:\n{err}"),
-        }
-    }
-
-    pub(super) fn selected_compact_text(&self, id: ExpressionId, entry: &EntryView) -> String {
-        let dependencies = self.engine.dependencies_of(id);
-        let dependents = self.engine.dependents_of(id);
-        let result = selected_result_summary(&entry.state, self.draft_entry == Some(id));
-
-        format!(
-            "{id}  {result}\nDepends on: {}    Used by: {}",
-            entry_set_summary(&dependencies, &self.entries),
-            entry_set_summary(&dependents, &self.entries)
-        )
     }
 
     pub(super) fn details_window_view(&self, window: window::Id) -> Element<'_, Message> {
@@ -109,20 +71,10 @@ impl GuiApp {
     }
 }
 
-fn selected_result_summary(state: &EntryState, draft: bool) -> String {
-    if draft {
-        "Result: None".to_string()
-    } else {
-        match state {
-            EntryState::Value(value) => format!("Result: {value}"),
-            EntryState::Error(_) => "Result: Error".to_string(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dagcal_app::ExpressionId;
 
     #[test]
     fn selected_error_text_includes_full_error() {

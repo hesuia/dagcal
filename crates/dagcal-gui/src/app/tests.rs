@@ -1,7 +1,7 @@
-use super::actions::SelectionDirection;
 use super::*;
-use dagcal_core::{
-    CompletionKind, EngineSnapshot, EntryState, ExpressionId, Number, PersistedEntry,
+use dagcal_app::{
+    CompletionKind, Draft, EngineSnapshot, EntryState, ExpressionId, Number, PersistedEntry,
+    SelectionDirection,
 };
 use iced::keyboard::{self, Key, key};
 use std::path::PathBuf;
@@ -783,7 +783,7 @@ fn load_result_replaces_entries_and_resets_edit_state() {
     app.hovered_entry = Some(ExpressionId::new(1));
     app.draft_entry = Some(ExpressionId::new(3));
 
-    let mut loaded = dagcal_core::Engine::new();
+    let mut loaded = dagcal_app::Engine::new();
     loaded.execute("x = 2");
     loaded.execute("x + 3");
 
@@ -921,7 +921,7 @@ fn dirty_state_tracks_saved_snapshot() {
 #[test]
 fn load_result_marks_loaded_snapshot_clean_and_sets_current_path() {
     let (mut app, _) = GuiApp::new();
-    let mut loaded = dagcal_core::Engine::new();
+    let mut loaded = dagcal_app::Engine::new();
     loaded.execute("x = 2");
     let loaded_snapshot = loaded.snapshot();
 
