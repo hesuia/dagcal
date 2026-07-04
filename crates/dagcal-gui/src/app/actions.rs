@@ -3,8 +3,8 @@ use super::{Confirmation, EntryStateFilter, GuiApp, LoadResult, Message, SaveRes
 use crate::app::completion::CompletionDirection;
 use crate::formatting::{entry_expression_source, entry_reference_token, state_summary};
 use dagcal_core::{Engine, EngineSnapshot, EntryState, EntryView, ExpressionId};
-use iced::Task;
 use iced::keyboard::{self, Key, key};
+use iced::{Size, Task, window};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -108,8 +108,7 @@ impl GuiApp {
             return UiEffect::None;
         }
 
-        self.request_confirmation(Confirmation::Delete(id));
-        UiEffect::None
+        self.perform_delete_entry(id)
     }
 
     fn perform_delete_entry(&mut self, id: ExpressionId) -> UiEffect {
@@ -298,13 +297,12 @@ impl GuiApp {
         UiEffect::None
     }
 
-    pub(super) fn clear(&mut self) -> UiEffect {
+    pub(super) fn clear(&mut self) -> Task<Message> {
         if self.is_dirty() {
-            self.request_confirmation(Confirmation::Clear);
-            return UiEffect::None;
+            return self.request_confirmation(Confirmation::Clear);
         }
 
-        self.perform_clear()
+        self.perform_clear().into_task(self)
     }
 
     fn perform_clear(&mut self) -> UiEffect {
@@ -348,8 +346,7 @@ impl GuiApp {
 
     pub(super) fn load(&mut self) -> Task<Message> {
         if self.is_dirty() {
-            self.request_confirmation(Confirmation::Load);
-            return Task::none();
+            return self.request_confirmation(Confirmation::Load);
         }
 
         self.start_load()
@@ -404,12 +401,9 @@ impl GuiApp {
         let Some(confirmation) = self.pending_confirmation.take() else {
             return Task::none();
         };
+        let close_confirmation = self.close_confirmation_window();
 
-        match confirmation {
-            Confirmation::Delete(id) => {
-                self.perform_delete_entry(id);
-                Task::none()
-            }
+        let action = match confirmation {
             Confirmation::Clear => {
                 self.perform_clear();
                 Task::none()
@@ -420,19 +414,20 @@ impl GuiApp {
                 self.main_window = None;
                 iced::exit()
             }
-        }
+        };
+
+        Task::batch([close_confirmation, action])
     }
 
-    pub(super) fn cancel_confirmation(&mut self) -> UiEffect {
+    pub(super) fn cancel_confirmation(&mut self) -> Task<Message> {
         self.pending_confirmation = None;
         self.status = "Action cancelled".to_string();
-        UiEffect::None
+        self.close_confirmation_window()
     }
 
     pub(super) fn quit(&mut self) -> Task<Message> {
         if self.is_dirty() {
-            self.request_confirmation(Confirmation::Quit);
-            Task::none()
+            self.request_confirmation(Confirmation::Quit)
         } else {
             iced::exit()
         }
@@ -442,14 +437,35 @@ impl GuiApp {
         self.engine.snapshot() != self.saved_snapshot
     }
 
-    pub(super) fn request_confirmation(&mut self, confirmation: Confirmation) {
+    pub(super) fn request_confirmation(&mut self, confirmation: Confirmation) -> Task<Message> {
         self.pending_confirmation = Some(confirmation);
         self.status = match confirmation {
-            Confirmation::Delete(id) => format!("Confirm deletion of {id}"),
             Confirmation::Clear => "Confirm clear".to_string(),
             Confirmation::Load => "Confirm load".to_string(),
             Confirmation::Quit | Confirmation::CloseMain(_) => "Confirm quit".to_string(),
         };
+
+        if self.confirmation_window.is_some() {
+            return Task::none();
+        }
+
+        let (id, open_window) = window::open(window::Settings {
+            size: Size::new(380.0, 180.0),
+            min_size: Some(Size::new(340.0, 160.0)),
+            exit_on_close_request: false,
+            ..window::Settings::default()
+        });
+        self.confirmation_window = Some(id);
+
+        open_window.discard()
+    }
+
+    fn close_confirmation_window(&mut self) -> Task<Message> {
+        let Some(id) = self.confirmation_window.take() else {
+            return Task::none();
+        };
+
+        window::close(id)
     }
 
     pub(super) fn undo(&mut self) -> UiEffect {

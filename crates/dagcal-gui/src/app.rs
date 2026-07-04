@@ -73,6 +73,7 @@ pub struct GuiApp {
     pub(crate) main_window: Option<window::Id>,
     pub(crate) help_window: Option<window::Id>,
     pub(crate) details_window: Option<window::Id>,
+    pub(crate) confirmation_window: Option<window::Id>,
     pub(crate) details_target: Option<ExpressionId>,
     pub(crate) help_topic: HelpTopic,
     pub(crate) engine: Engine,
@@ -107,7 +108,6 @@ pub(crate) enum EntryStateFilter {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Confirmation {
-    Delete(ExpressionId),
     Clear,
     Load,
     Quit,
@@ -130,6 +130,7 @@ impl GuiApp {
                 main_window: Some(main_window),
                 help_window: None,
                 details_window: None,
+                confirmation_window: None,
                 details_target: None,
                 help_topic: HelpTopic::KeyboardShortcuts,
                 engine,
@@ -178,7 +179,7 @@ impl GuiApp {
                 self.handle_keyboard_event(event)
             }
             Message::Keyboard(_, _) => effects::UiEffect::None,
-            Message::Clear => self.clear(),
+            Message::Clear => return self.clear(),
             Message::Save => return self.save(),
             Message::SaveAs => return self.save_as(),
             Message::Load => return self.load(),
@@ -204,7 +205,7 @@ impl GuiApp {
             }
             Message::WindowClosed(id) => return self.window_closed(id),
             Message::ConfirmPending => return self.confirm_pending(),
-            Message::CancelConfirmation => self.cancel_confirmation(),
+            Message::CancelConfirmation => return self.cancel_confirmation(),
         }
         .into_task(self)
     }
@@ -269,10 +270,16 @@ impl GuiApp {
             return window::close(id);
         }
 
+        if self.confirmation_window == Some(id) {
+            self.confirmation_window = None;
+            self.pending_confirmation = None;
+            self.status = "Action cancelled".to_string();
+            return window::close(id);
+        }
+
         if self.main_window == Some(id) {
             if self.is_dirty() {
-                self.request_confirmation(Confirmation::CloseMain(id));
-                return Task::none();
+                return self.request_confirmation(Confirmation::CloseMain(id));
             }
             self.main_window = None;
             return iced::exit();

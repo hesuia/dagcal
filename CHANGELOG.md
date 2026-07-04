@@ -10,6 +10,10 @@ The format is based on Keep a Changelog.
 - GUI: Added entry search and All/Values/Errors filtering for the entries table.
 - GUI: Show entry search controls only while searching, with View menu, Ctrl+F, Clear, and Esc controls.
 
+### Changed
+- GUI: Show discard-confirmation prompts in a separate window instead of inline in the main window.
+- GUI: Remove the confirmation prompt when deleting entries.
+
 ## [0.3.0] - 2026-07-02
 
 ### Added

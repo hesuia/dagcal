@@ -699,14 +699,11 @@ fn delete_keeps_later_ids_available() {
     app.submit_input();
 
     app.delete_entry(ExpressionId::new(1));
-    assert_eq!(
-        app.pending_confirmation,
-        Some(Confirmation::Delete(ExpressionId::new(1)))
-    );
-    let _ = app.update(Message::ConfirmPending);
 
     assert_eq!(app.entries.len(), 1);
     assert_eq!(app.entries[0].id, ExpressionId::new(2));
+    assert_eq!(app.pending_confirmation, None);
+    assert_eq!(app.confirmation_window, None);
 }
 
 #[test]
@@ -730,16 +727,12 @@ fn delete_key_removes_selected_entry() {
         repeat: false,
     });
 
-    assert_eq!(
-        app.pending_confirmation,
-        Some(Confirmation::Delete(ExpressionId::new(1)))
-    );
-    let _ = app.update(Message::ConfirmPending);
-
     assert_eq!(app.entries.len(), 1);
     assert_eq!(app.entries[0].id, ExpressionId::new(2));
     assert_eq!(app.selected, Some(ExpressionId::new(2)));
     assert_eq!(app.editing, None);
+    assert_eq!(app.pending_confirmation, None);
+    assert_eq!(app.confirmation_window, None);
     assert_eq!(app.status, "Removed $1");
 }
 
@@ -875,7 +868,6 @@ fn deleting_edited_entry_selects_fallback_without_entering_edit() {
 
     app.start_edit(ExpressionId::new(1));
     app.delete_entry(ExpressionId::new(1));
-    let _ = app.update(Message::ConfirmPending);
 
     assert_eq!(app.entries.len(), 1);
     assert_eq!(app.selected, Some(ExpressionId::new(2)));
@@ -884,24 +876,18 @@ fn deleting_edited_entry_selects_fallback_without_entering_edit() {
 }
 
 #[test]
-fn delete_confirmation_cancel_preserves_entry_state() {
+fn delete_removes_entry_without_confirmation() {
     let (mut app, _) = GuiApp::new();
     app.input.set("10".to_string());
     app.submit_input();
-    let before = app.engine.snapshot();
 
     app.delete_entry(ExpressionId::new(1));
-    assert_eq!(
-        app.pending_confirmation,
-        Some(Confirmation::Delete(ExpressionId::new(1)))
-    );
 
-    let _ = app.update(Message::CancelConfirmation);
-
-    assert_eq!(app.engine.snapshot(), before);
-    assert_eq!(app.entries.len(), 1);
+    assert!(app.engine.entry_by_id(ExpressionId::new(1)).is_none());
+    assert!(app.entries.is_empty());
     assert_eq!(app.pending_confirmation, None);
-    assert_eq!(app.status, "Action cancelled");
+    assert_eq!(app.confirmation_window, None);
+    assert_eq!(app.status, "Removed $1");
 }
 
 #[test]
@@ -958,17 +944,58 @@ fn dirty_load_clear_and_quit_open_confirmation_before_mutating() {
 
     let _ = app.update(Message::Load);
     assert_eq!(app.pending_confirmation, Some(Confirmation::Load));
+    assert!(app.confirmation_window.is_some());
     assert_eq!(app.engine.snapshot(), before);
 
     let _ = app.update(Message::CancelConfirmation);
+    assert_eq!(app.confirmation_window, None);
     let _ = app.update(Message::Clear);
     assert_eq!(app.pending_confirmation, Some(Confirmation::Clear));
+    assert!(app.confirmation_window.is_some());
     assert_eq!(app.engine.snapshot(), before);
 
     let _ = app.update(Message::CancelConfirmation);
+    assert_eq!(app.confirmation_window, None);
     let _ = app.update(Message::Quit);
     assert_eq!(app.pending_confirmation, Some(Confirmation::Quit));
+    assert!(app.confirmation_window.is_some());
     assert_eq!(app.engine.snapshot(), before);
+}
+
+#[test]
+fn closing_dirty_main_window_opens_confirmation_window() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    let main_window = app.main_window.unwrap();
+
+    let _ = app.update(Message::WindowClosed(main_window));
+
+    assert_eq!(
+        app.pending_confirmation,
+        Some(Confirmation::CloseMain(main_window))
+    );
+    assert!(app.confirmation_window.is_some());
+    assert_eq!(app.main_window, Some(main_window));
+    assert_eq!(app.status, "Confirm quit");
+}
+
+#[test]
+fn closing_confirmation_window_cancels_pending_action() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+
+    let _ = app.update(Message::Load);
+    let confirmation_window = app.confirmation_window.unwrap();
+    let before = app.engine.snapshot();
+
+    let _ = app.update(Message::WindowClosed(confirmation_window));
+
+    assert_eq!(app.pending_confirmation, None);
+    assert_eq!(app.confirmation_window, None);
+    assert_eq!(app.engine.snapshot(), before);
+    assert_eq!(app.status, "Action cancelled");
 }
 
 #[test]

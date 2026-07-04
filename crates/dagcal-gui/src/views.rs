@@ -11,6 +11,10 @@ use std::path::Path;
 
 impl GuiApp {
     pub(crate) fn title(&self, window: window::Id) -> String {
+        if self.confirmation_window == Some(window) {
+            return "dagcal Confirmation".to_string();
+        }
+
         if self.details_window == Some(window) {
             return match self.details_target {
                 Some(id) => format!("dagcal Details - {id}"),
@@ -30,6 +34,10 @@ impl GuiApp {
     }
 
     pub(crate) fn view(&self, window: window::Id) -> Element<'_, Message> {
+        if self.confirmation_window == Some(window) {
+            return self.confirmation_window_view(window);
+        }
+
         if self.details_window == Some(window) {
             return self.details_window_view(window);
         }
@@ -42,7 +50,7 @@ impl GuiApp {
     }
 
     fn main_window_view(&self) -> Element<'_, Message> {
-        let mut content = column![
+        let content = column![
             self.menu_bar_view(),
             self.entries_view(),
             rule::horizontal(1),
@@ -51,11 +59,7 @@ impl GuiApp {
         ]
         .spacing(12);
 
-        if self.pending_confirmation.is_some() {
-            content = content.push(self.confirmation_view());
-        }
-
-        content = content.push(self.status_bar_view());
+        let content = content.push(self.status_bar_view());
 
         container(content.padding(16))
             .width(Fill)
@@ -88,32 +92,46 @@ impl GuiApp {
         .into()
     }
 
-    fn confirmation_view(&self) -> Element<'_, Message> {
+    fn confirmation_window_view(&self, window: window::Id) -> Element<'_, Message> {
         let Some(confirmation) = self.pending_confirmation else {
-            return container("").into();
+            return container(
+                column![
+                    text("No pending action").size(24),
+                    button("Close").on_press(Message::WindowClosed(window)),
+                ]
+                .spacing(16)
+                .padding(24)
+                .width(Length::Fill),
+            )
+            .width(Fill)
+            .height(Fill)
+            .into();
         };
         let (title, body, action) = confirmation_text(confirmation);
 
         container(
-            row![
-                column![text(title).size(16), text(body).size(13),]
-                    .spacing(4)
-                    .width(Length::Fill),
-                button("Cancel")
-                    .padding([7, 12])
-                    .style(|_, status| menu_button_style(status))
-                    .on_press(Message::CancelConfirmation),
-                button(action)
-                    .padding([7, 12])
-                    .style(|_, status| menu_button_style(status))
-                    .on_press(Message::ConfirmPending),
+            column![
+                text(title).size(24),
+                text(body).size(15),
+                row![
+                    button("Cancel")
+                        .padding([7, 12])
+                        .style(|_, status| menu_button_style(status))
+                        .on_press(Message::CancelConfirmation),
+                    button(action)
+                        .padding([7, 12])
+                        .style(|_, status| menu_button_style(status))
+                        .on_press(Message::ConfirmPending),
+                ]
+                .spacing(10)
+                .align_y(iced::Center),
             ]
-            .spacing(10)
-            .align_y(iced::Center),
+            .spacing(16)
+            .padding(24)
+            .width(Length::Fill),
         )
-        .padding(12)
         .width(Fill)
-        .style(|_| status_bar_style())
+        .height(Fill)
         .into()
     }
 
@@ -189,7 +207,6 @@ fn path_label(path: &Path) -> String {
 
 fn confirmation_text(confirmation: Confirmation) -> (&'static str, String, &'static str) {
     match confirmation {
-        Confirmation::Delete(id) => ("Delete entry?", format!("Delete {id}?"), "Delete"),
         Confirmation::Clear => (
             "Clear all entries?",
             "All current entries will be removed.".to_string(),
