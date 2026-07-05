@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-05
+
 ### Added
 - Added a shared `dagcal-app` crate for UI-agnostic app session state, draft input, completion, filtering, and display formatting used by frontends.
 - GUI: Added entry search and All/Values/Errors filtering for the entries table.
