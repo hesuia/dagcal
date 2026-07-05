@@ -1,27 +1,30 @@
 # dagcal
 
-`dagcal` is a dependency-aware calculator written in Rust. It keeps every saved
-expression as a stable `$n` entry, lets later expressions refer to earlier
-results or named definitions, and recomputes dependent entries when a source
-entry changes.
+`dagcal` is a dependency-aware calculator written in Rust. Every saved
+expression gets a stable result ID such as `$1`, later expressions can refer to
+earlier results or named definitions, and the engine recomputes dependent
+entries automatically when a source entry changes.
 
-The workspace currently contains:
+The repository is a Cargo workspace with a reusable core engine and multiple
+frontends:
 
-- `crates/dagcal-core`: parser, evaluator, dependency graph, persistence, and public engine API.
-- `crates/dagcal-repl`: line-oriented REPL frontend.
-- `crates/dagcal-tui`: terminal UI frontend built with `ratatui`.
-- `crates/dagcal-gui`: desktop GUI frontend built with `iced`.
+- `dagcal-core`: parser, evaluator, dependency graph, persistence, recomputation, and the public engine API.
+- `dagcal-app`: UI-agnostic session state, filtering, completion, draft editing, and formatting shared by frontends.
+- `dagcal-repl`: line-oriented command-line frontend.
+- `dagcal-tui`: terminal UI built with `ratatui` and `crossterm`.
+- `dagcal-gui`: desktop GUI built with `iced`.
 
-## Features
+## Highlights
 
-- Arithmetic expressions with `+`, `-`, `*`, `/`, `%`, `^`, unary signs, and parentheses.
-- Stable result references such as `$1`, `$2`, and `$10`.
-- Named definitions such as `subtotal = 1200`.
-- Automatic recomputation of dependent expressions after edits or removals.
+- Stable result references like `$1`, `$2`, and `$10`.
+- Named definitions like `subtotal = 1200`.
+- Automatic recomputation of dependent entries after edits and removals.
+- Undo and redo support.
 - Exact rational arithmetic where possible, with float boundaries for constants and math functions.
-- Decimal, binary, octal, and hexadecimal numeric literals, including fractional forms.
-- Built-in math functions such as `sqrt`, `sin`, `pow`, `sum`, `avg`, `min`, and `max`.
-- Structured parse, evaluation, cycle, and persistence errors from the core API.
+- Decimal, binary, octal, and hexadecimal literals, including fractional forms.
+- Built-in math functions and extensible runtime constants/functions from the core API.
+- Session snapshot persistence in the engine, with save/load support in the GUI.
+- Structured parse, evaluation, cycle, and persistence errors.
 
 ## Quick Start
 
@@ -55,37 +58,64 @@ Run the TUI:
 cargo run -p dagcal-tui
 ```
 
-TUI keys:
-
-- `i`: insert a new expression.
-- `e`: edit the selected entry.
-- `j`/`Down` and `k`/`Up`: move the selection.
-- `/`: search entries; type a query, `Tab` cycles All/Values/Errors, and `Esc` or `Enter` closes search.
-- `p`: insert the selected entry reference into the input.
-- `Tab`: accept the selected completion while inserting or editing.
-- `R`: recalculate the selected entry.
-- `A`: recalculate all entries.
-- `d`: delete the selected entry.
-- `u`/`r`: undo and redo.
-- `c`: clear entries.
-- `q`: quit.
-
 Run the GUI:
 
 ```sh
 cargo run -p dagcal-gui
 ```
 
-## REPL Commands
+## Frontends
+
+### REPL
+
+The REPL is the simplest way to explore engine behavior.
+
+Commands:
 
 - `:help`: show command help.
-- `:list`: show saved expressions and current states.
-- `:set <id> <expr>`: edit an entry by name or `$n` result ID.
-- `:remove <id>`: remove an entry by name or `$n` result ID.
+- `:list`: show saved expressions and their current states.
+- `:set <id> <expr>`: edit an entry by name or `$n`.
+- `:remove <id>`: remove an entry by name or `$n`.
 - `:clear`: clear all expressions.
+- `:undo`: undo the last change.
+- `:redo`: redo the last undone change.
 - `:quit` or `:exit`: exit the REPL.
 
+### TUI
+
+The terminal UI is focused on fast keyboard-driven editing.
+
+- `i`: insert a new expression.
+- `e`: edit the selected entry.
+- `j` / `Down`, `k` / `Up`: move selection.
+- `/`: open entry search.
+- `Tab`: accept the selected completion while editing.
+- `p`: insert the selected entry reference into the input.
+- `R`: recalculate the selected entry.
+- `A`: recalculate all entries.
+- `d`: delete the selected entry.
+- `u` / `r`: undo and redo.
+- `c`: clear all entries.
+- `q`: quit.
+
+While search is open, type to filter entries and use `Tab` to cycle the
+All/Values/Errors filter. `Esc` or `Enter` closes search.
+
+### GUI
+
+The GUI adds desktop-oriented session management and menus on top of the shared
+application state:
+
+- Save, Save As, and Load for JSON session snapshots.
+- Dirty-state tracking and discard confirmation before destructive actions.
+- Entry search with All/Values/Errors filtering.
+- Inline completions for entries, `$n` references, constants, and functions.
+- Per-entry actions such as edit, delete, recalculate, and reference insertion.
+- Keyboard shortcuts including `Ctrl+F`, `Ctrl+Z`, `Ctrl+Y`, `Esc`, and `Delete`.
+
 ## Expression Syntax
+
+Examples:
 
 ```text
 1 + 2 * 3
@@ -99,10 +129,24 @@ sum(1, 2, 3, tax)
 0xA.F
 ```
 
+Supported syntax includes:
+
+- Arithmetic operators: `+`, `-`, `*`, `/`, `%`, `^`
+- Unary `+` and `-`
+- Parentheses
+- Stable `$n` result references
+- Named definitions and named references
+- Function calls
+- Decimal, binary, octal, and hexadecimal numeric literals
+
 Names must start with an ASCII letter or `_`, followed by ASCII letters,
 digits, or `_`.
 
-## Core API Example
+## Core API
+
+`dagcal-core` keeps the public API intentionally small. `Engine` owns the full
+session state, while `EntryState`, `EntryView`, and snapshot types expose the
+current calculator state to applications.
 
 ```rust
 use dagcal_core::{Engine, EntryState, Number};
@@ -125,6 +169,23 @@ assert_eq!(
 );
 ```
 
+The engine also supports:
+
+- Editing and removing entries by name, `$n`, or `ExpressionId`
+- Manual recalculation of one entry or all entries
+- Undo / redo history
+- Snapshot export and restore
+- Runtime registration of constants and functions
+
+## Persistence
+
+The engine can serialize a session as an `EngineSnapshot`. The GUI uses this to
+save and load JSON files, and other frontends can use the same snapshot API if
+they need persistence.
+
+Snapshots preserve source text, stable IDs, and names. Values are recomputed
+when a snapshot is restored.
+
 ## Development
 
 Run the full test suite:
@@ -133,7 +194,7 @@ Run the full test suite:
 cargo test --workspace
 ```
 
-Run only the public API integration tests:
+Run the public API integration tests:
 
 ```sh
 cargo test public_api --workspace
@@ -151,13 +212,31 @@ Apply formatting:
 cargo fmt
 ```
 
+Check dependency and advisory policy:
+
+```sh
+cargo deny check
+```
+
+Run core benchmarks:
+
+```sh
+cargo bench -p dagcal-core
+```
+
+Build optimized distribution binaries:
+
+```sh
+cargo build -p dagcal-gui --profile dist-gui
+cargo build -p dagcal-tui --profile dist-tui
+```
+
 ## Architecture Notes
 
-The core library models expressions as a dependency graph. `ExpressionId` is the
-canonical internal identifier, displayed to users as stable `$n` references.
-Public convenience APIs may accept names or `$n` strings, but they resolve those
-targets to `ExpressionId` before delegating to ID-specific engine behavior.
+Internally, the engine models saved expressions as a dependency graph.
+`ExpressionId` is the canonical internal identifier and is shown to users as a
+stable `$n` reference.
 
-When an entry is edited, removed, restored, or affected by a runtime symbol
-change, the engine recomputes only the affected dependency subgraph and keeps
-unaffected entries stable.
+When an entry is edited, removed, restored from history, or affected by a
+runtime constant/function change, the engine recomputes only the affected part
+of the graph and leaves unrelated entries untouched.
