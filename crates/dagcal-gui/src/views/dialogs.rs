@@ -71,7 +71,7 @@ fn help_text(topic: HelpTopic) -> (&'static str, &'static str) {
     match topic {
         HelpTopic::KeyboardShortcuts => (
             "Keyboard shortcuts",
-            "Ctrl+F: Search entries\nEsc: Close completion or entry search\nCtrl+Z: Undo\nCtrl+Y: Redo\nDelete: Remove the selected entry\nArrow Up/Down: Move the selection when the input is empty",
+            "Ctrl+N: New entry\nCtrl+S: Save\nCtrl+Shift+S: Save As\nCtrl+O: Load\nCtrl+Q: Quit\nCtrl+F: Search entries\nCtrl+Z: Undo\nCtrl+Y or Ctrl+Shift+Z: Redo\nCtrl+E or F2: Edit selected entry\nF5: Recalculate selected entry\nCtrl+R: Recalculate all entries\nDelete: Remove the selected entry\nArrow Up/Down: Move the selection when the input is empty\nEsc: Close completion or search, then cancel edit",
         ),
         HelpTopic::About => (
             "About dagcal",

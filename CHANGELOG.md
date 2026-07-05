@@ -8,6 +8,8 @@ The format is based on Keep a Changelog.
 
 ### Added
 - Added `dist-gui` and `dist-tui` Cargo profiles for optimized distribution builds of the GUI and TUI frontends.
+- GUI: Added shortcuts for new entry, save, save as, load, quit, edit selected entry, and recalculation actions.
+- GUI: Added double-click editing for entry rows.
 
 ### Changed
 - GUI/TUI: Omit the currently edited or drafted entry from completion dropdown suggestions.

@@ -130,7 +130,7 @@ impl GuiApp {
             }
             Message::RightClick(_) => effects::UiEffect::None,
             Message::Keyboard(window, event) if self.main_window == Some(window) => {
-                self.handle_keyboard_event(event)
+                return self.handle_keyboard_task(event);
             }
             Message::Keyboard(_, _) => effects::UiEffect::None,
             Message::SelectionBoundsMeasured(bounds, direction) => {

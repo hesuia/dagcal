@@ -841,6 +841,90 @@ fn keyboard_shortcuts_trigger_undo_and_redo() {
 }
 
 #[test]
+fn keyboard_shift_z_triggers_redo() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+
+    app.handle_keyboard_event(character_key_event("z", keyboard::Modifiers::CTRL));
+    assert!(app.entries.is_empty());
+
+    app.handle_keyboard_event(character_key_event(
+        "z",
+        keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT,
+    ));
+
+    assert_eq!(app.entries.len(), 1);
+    assert_eq!(app.entries[0].state, EntryState::Value(Number::from(10)));
+    assert_eq!(app.status, "Redone");
+}
+
+#[test]
+fn keyboard_shortcuts_start_new_edit_and_recalculate_entries() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("left + 1".to_string());
+    app.submit_input();
+    app.input.set("left = 10".to_string());
+    app.submit_input();
+    app.input.clear();
+    app.editing = None;
+    app.selected = Some(ExpressionId::new(1));
+
+    let _ = app.handle_keyboard_task(character_key_event("e", keyboard::Modifiers::CTRL));
+    assert_eq!(app.editing, Some(ExpressionId::new(1)));
+    assert_eq!(app.input.source(), "left + 1");
+
+    app.handle_keyboard_event(named_key_event(key::Named::Escape));
+    assert_eq!(app.editing, None);
+    assert_eq!(app.input.source(), "");
+
+    app.handle_keyboard_event(named_key_event(key::Named::F2));
+    assert_eq!(app.editing, Some(ExpressionId::new(1)));
+
+    app.handle_keyboard_event(named_key_event(key::Named::Escape));
+    app.handle_keyboard_event(named_key_event(key::Named::F5));
+    assert_eq!(app.entries[0].state, EntryState::Value(Number::from(11)));
+    assert_eq!(app.status, "Recalculated $1");
+
+    let _ = app.handle_keyboard_task(character_key_event("n", keyboard::Modifiers::CTRL));
+    assert_eq!(app.editing, None);
+    assert_eq!(app.input.source(), "");
+    assert_eq!(app.draft_entry, Some(ExpressionId::new(3)));
+}
+
+#[test]
+fn keyboard_ctrl_r_recalculates_all_entries() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("left + 1".to_string());
+    app.submit_input();
+    app.input.set("left = 10".to_string());
+    app.submit_input();
+
+    let _ = app.handle_keyboard_task(character_key_event("r", keyboard::Modifiers::CTRL));
+
+    assert_eq!(app.entries[0].state, EntryState::Value(Number::from(11)));
+    assert_eq!(app.status, "Recalculated all entries");
+}
+
+#[test]
+fn dirty_file_shortcuts_request_confirmation_before_load_or_quit() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+
+    let _ = app.handle_keyboard_task(character_key_event("o", keyboard::Modifiers::CTRL));
+    assert_eq!(app.pending_confirmation, Some(Confirmation::Load));
+    assert_eq!(app.status, "Confirm load");
+
+    app.pending_confirmation = None;
+    app.confirmation_window = None;
+
+    let _ = app.handle_keyboard_task(character_key_event("q", keyboard::Modifiers::CTRL));
+    assert_eq!(app.pending_confirmation, Some(Confirmation::Quit));
+    assert_eq!(app.status, "Confirm quit");
+}
+
+#[test]
 fn load_result_replaces_entries_and_resets_edit_state() {
     let (mut app, _) = GuiApp::new();
     app.input.set("10".to_string());

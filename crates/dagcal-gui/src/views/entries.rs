@@ -154,6 +154,7 @@ fn entry_row<'a>(
         .style(move |_| row_container_style(selected)),
     )
     .on_press(Message::Select(entry.id))
+    .on_double_click(Message::Edit(entry.id))
     .on_enter(Message::EntryHovered(entry.id))
     .on_exit(Message::EntryUnhovered(entry.id));
 

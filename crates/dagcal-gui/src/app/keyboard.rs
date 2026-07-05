@@ -1,9 +1,42 @@
 use super::GuiApp;
 use super::effects::UiEffect;
 use dagcal_app::{CompletionDirection, SelectionDirection};
+use iced::Task;
 use iced::keyboard::{self, Key, key};
 
 impl GuiApp {
+    pub(super) fn handle_keyboard_task(&mut self, event: keyboard::Event) -> Task<super::Message> {
+        let keyboard::Event::KeyPressed { key, modifiers, .. } = &event else {
+            return Task::none();
+        };
+
+        if modifiers.control() && is_character_key(key, "s") {
+            return if modifiers.shift() {
+                self.save_as()
+            } else {
+                self.save()
+            };
+        }
+
+        if modifiers.control() && is_character_key(key, "o") {
+            return self.load();
+        }
+
+        if modifiers.control() && is_character_key(key, "q") {
+            return self.quit();
+        }
+
+        if modifiers.control() && is_character_key(key, "n") {
+            return self.start_new_entry().into_task(self);
+        }
+
+        if modifiers.control() && is_character_key(key, "r") {
+            return self.recalculate_all().into_task(self);
+        }
+
+        self.handle_keyboard_event(event).into_task(self)
+    }
+
     pub(super) fn handle_keyboard_event(&mut self, event: keyboard::Event) -> UiEffect {
         match event {
             keyboard::Event::KeyPressed {
@@ -35,6 +68,12 @@ impl GuiApp {
             } if self.session.entry_search_open => {
                 self.close_entry_search();
             }
+            keyboard::Event::KeyPressed {
+                key: Key::Named(key::Named::Escape),
+                ..
+            } if self.session.editing.is_some() => {
+                self.cancel_edit();
+            }
             keyboard::Event::KeyPressed { key, modifiers, .. }
                 if modifiers.control() && is_character_key(&key, "f") =>
             {
@@ -61,6 +100,7 @@ impl GuiApp {
             keyboard::Event::KeyPressed { key, modifiers, .. }
                 if self.session.selection_navigation_enabled()
                     && modifiers.control()
+                    && !modifiers.shift()
                     && is_character_key(&key, "z") =>
             {
                 self.undo();
@@ -68,9 +108,31 @@ impl GuiApp {
             keyboard::Event::KeyPressed { key, modifiers, .. }
                 if self.session.selection_navigation_enabled()
                     && modifiers.control()
-                    && is_character_key(&key, "y") =>
+                    && (is_character_key(&key, "y")
+                        || (modifiers.shift() && is_character_key(&key, "z"))) =>
             {
                 self.redo();
+            }
+            keyboard::Event::KeyPressed {
+                key: Key::Named(key::Named::F2),
+                ..
+            } if self.session.selection_navigation_enabled() => {
+                return self.edit_selected_entry();
+            }
+            keyboard::Event::KeyPressed { key, modifiers, .. }
+                if self.session.selection_navigation_enabled()
+                    && modifiers.control()
+                    && is_character_key(&key, "e") =>
+            {
+                return self.edit_selected_entry();
+            }
+            keyboard::Event::KeyPressed {
+                key: Key::Named(key::Named::F5),
+                ..
+            } if self.session.selection_navigation_enabled() => {
+                if let Some(id) = self.session.selected {
+                    self.recalculate_entry(id);
+                }
             }
             _ => {}
         }
@@ -104,5 +166,13 @@ impl GuiApp {
         } else {
             UiEffect::None
         }
+    }
+
+    fn edit_selected_entry(&mut self) -> UiEffect {
+        if let Some(id) = self.session.selected {
+            return self.start_edit(id);
+        }
+
+        UiEffect::None
     }
 }
