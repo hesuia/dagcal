@@ -18,11 +18,13 @@ use iced_aw::ContextMenu;
 impl GuiApp {
     pub(super) fn entries_view(&self) -> Element<'_, Message> {
         let filtered_entries = self.session.filtered_entries();
-        let mut list = column![].spacing(6);
+        let mut entries = column![].spacing(6);
         if self.session.entry_search_open {
-            list = list.push(entry_filters(self));
+            entries = entries.push(entry_filters(self));
         }
-        list = list.push(entry_header());
+        entries = entries.push(entry_header());
+
+        let mut list = column![].spacing(6);
 
         if self.session.entries.is_empty() {
             list = list.push(
@@ -47,8 +49,12 @@ impl GuiApp {
             }
         }
 
-        scrollable(list)
-            .id(ENTRIES_SCROLLABLE_ID)
+        entries
+            .push(
+                scrollable(list)
+                    .id(ENTRIES_SCROLLABLE_ID)
+                    .height(Length::Fill),
+            )
             .height(Length::FillPortion(3))
             .into()
     }

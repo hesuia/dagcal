@@ -15,6 +15,8 @@ The format is based on Keep a Changelog.
 - GUI: Anchored the menu bar to the top edge and the status bar to the bottom edge of the main window while keeping workspace padding inside the content area.
 - GUI: Keep the selected entry visible when moving through entries with Arrow Up or Arrow Down.
 - GUI: Removed the inline Details button and compacted the selected-entry preview area.
+- GUI: Keep the entries table header visible while scrolling entry rows.
+- GUI: Make the expression completion dropdown scrollable when candidates exceed the visible area.
 
 ## [0.4.0] - 2026-07-05
 

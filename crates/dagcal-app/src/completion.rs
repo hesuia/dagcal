@@ -1,7 +1,5 @@
 use crate::{CompletionItem, CompletionKind, Draft, Engine, ExpressionId, SessionChange};
 
-const MAX_COMPLETIONS: usize = 8;
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompletionState {
     token_range: Option<CompletionToken>,
@@ -39,7 +37,6 @@ impl CompletionState {
         let candidates = items
             .into_iter()
             .filter(|item| completion_matches(item, prefix))
-            .take(MAX_COMPLETIONS)
             .map(completion_candidate)
             .collect::<Vec<_>>();
 
@@ -247,6 +244,25 @@ mod tests {
         let state = CompletionState::for_source("$", engine.completion_items());
 
         assert!(state.items.iter().any(|item| item.insert == "$1"));
+    }
+
+    #[test]
+    fn completion_state_keeps_all_matching_candidates() {
+        let mut engine = Engine::new();
+        for index in 0..10 {
+            engine.execute(&format!("item_{index} = {index}"));
+        }
+
+        let state = CompletionState::for_source("item", engine.completion_items());
+
+        assert_eq!(
+            state
+                .items()
+                .iter()
+                .filter(|item| item.kind == CompletionKind::Entry)
+                .count(),
+            10
+        );
     }
 
     #[test]

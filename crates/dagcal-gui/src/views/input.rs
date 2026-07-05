@@ -4,7 +4,7 @@ use crate::style::{
     DETAIL_HEIGHT, completion_item_style, completion_panel_style, fixed_scroll_text,
 };
 use dagcal_app::CompletionKind;
-use iced::widget::{button, column, container, row, text, text_input};
+use iced::widget::{button, column, container, row, scrollable, text, text_input};
 use iced::{Element, Fill, Length};
 use iced_aw::{DropDown, drop_down};
 
@@ -103,7 +103,7 @@ impl GuiApp {
             );
         }
 
-        container(candidates)
+        container(scrollable(candidates))
             .padding(5)
             .width(Fill)
             .style(|_| completion_panel_style())
