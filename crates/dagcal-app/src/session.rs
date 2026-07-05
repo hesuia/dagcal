@@ -111,7 +111,13 @@ impl AppSession {
     }
 
     pub fn refresh_completions(&mut self) {
-        refresh_completion_state(&mut self.completion, &self.input, &self.engine);
+        let current_entry_id = self.current_input_entry_id();
+        refresh_completion_state(
+            &mut self.completion,
+            &self.input,
+            &self.engine,
+            current_entry_id,
+        );
     }
 
     pub fn close_completions(&mut self) {
@@ -171,8 +177,9 @@ impl AppSession {
 
     pub fn input_changed(&mut self, value: String) -> SessionChange {
         self.input.set(value);
+        let should_scroll = self.ensure_empty_draft_entry();
         self.refresh_completions();
-        if self.ensure_empty_draft_entry() {
+        if should_scroll {
             SessionChange::ScrollToSelection
         } else {
             SessionChange::None
@@ -526,6 +533,10 @@ impl AppSession {
         }
     }
 
+    fn current_input_entry_id(&self) -> Option<ExpressionId> {
+        self.editing.or(self.draft_entry)
+    }
+
     fn set_selected_entry(&mut self, id: ExpressionId) {
         let changed = self.selected != Some(id);
         self.selected = Some(id);
@@ -789,5 +800,67 @@ mod tests {
 
         assert_eq!(session.input.source(), "subtotal");
         assert_eq!(session.status, "Inserted subtotal");
+    }
+
+    #[test]
+    fn editing_entry_excludes_itself_from_named_completions() {
+        let mut session = AppSession::new();
+        session.input.set("subtotal = 10".to_string());
+        session.submit_input();
+
+        session.start_edit(ExpressionId::new(1));
+        session.input_changed("sub".to_string());
+
+        assert!(session.completion_candidates().iter().all(|candidate| {
+            candidate.label != "subtotal" || candidate.kind != CompletionKind::Entry
+        }));
+    }
+
+    #[test]
+    fn editing_entry_excludes_its_own_result_completion() {
+        let mut session = AppSession::new();
+        session.input.set("subtotal = 10".to_string());
+        session.submit_input();
+        session.input.set("20".to_string());
+        session.submit_input();
+
+        session.start_edit(ExpressionId::new(1));
+        session.input_changed("$".to_string());
+
+        assert!(
+            session
+                .completion_candidates()
+                .iter()
+                .all(|candidate| candidate.label != "$1")
+        );
+        assert!(
+            session
+                .completion_candidates()
+                .iter()
+                .any(|candidate| candidate.label == "$2")
+        );
+    }
+
+    #[test]
+    fn new_draft_entry_excludes_its_own_result_completion() {
+        let mut session = AppSession::new();
+        session.input.set("10".to_string());
+        session.submit_input();
+
+        session.input_changed("$".to_string());
+
+        assert_eq!(session.draft_entry, Some(ExpressionId::new(2)));
+        assert!(
+            session
+                .completion_candidates()
+                .iter()
+                .any(|candidate| candidate.label == "$1")
+        );
+        assert!(
+            session
+                .completion_candidates()
+                .iter()
+                .all(|candidate| candidate.label != "$2")
+        );
     }
 }

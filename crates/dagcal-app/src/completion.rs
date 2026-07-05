@@ -1,4 +1,4 @@
-use crate::{CompletionItem, CompletionKind, Draft, Engine, SessionChange};
+use crate::{CompletionItem, CompletionKind, Draft, Engine, ExpressionId, SessionChange};
 
 const MAX_COMPLETIONS: usize = 8;
 
@@ -178,8 +178,23 @@ pub(crate) fn refresh_completion_state(
     completion: &mut CompletionState,
     input: &Draft,
     engine: &Engine,
+    exclude_entry_id: Option<ExpressionId>,
 ) {
-    completion.refresh(input.source(), engine.completion_items());
+    let mut items = engine.completion_items();
+    if let Some(id) = exclude_entry_id {
+        items.retain(|item| !completion_item_references_entry(item, id));
+    }
+
+    completion.refresh(input.source(), items);
+}
+
+fn completion_item_references_entry(item: &CompletionItem, id: ExpressionId) -> bool {
+    let id = id.to_string();
+    match item.kind {
+        CompletionKind::Entry => item.detail.as_deref() == Some(id.as_str()),
+        CompletionKind::Result => item.label == id,
+        CompletionKind::Constant | CompletionKind::Function => false,
+    }
 }
 
 pub(crate) fn accept_selected_completion(
@@ -261,5 +276,28 @@ mod tests {
             completion_menu_entries_for_kind(engine.completion_items(), CompletionKind::Constant);
 
         assert!(constants.iter().all(|entry| entry.label != "x"));
+    }
+
+    #[test]
+    fn refresh_completion_state_excludes_current_entry_name_and_result() {
+        let mut engine = Engine::new();
+        engine.execute("subtotal = 10");
+        engine.execute("subtotal * 2");
+        let mut state = CompletionState::default();
+        let mut input = Draft::default();
+
+        input.set("sub".to_string());
+        refresh_completion_state(&mut state, &input, &engine, Some(ExpressionId::new(1)));
+        assert!(
+            state
+                .items()
+                .iter()
+                .all(|item| item.label != "subtotal" && item.kind != CompletionKind::Entry)
+        );
+
+        input.set("$".to_string());
+        refresh_completion_state(&mut state, &input, &engine, Some(ExpressionId::new(1)));
+        assert!(state.items().iter().all(|item| item.label != "$1"));
+        assert!(state.items().iter().any(|item| item.label == "$2"));
     }
 }

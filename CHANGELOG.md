@@ -10,6 +10,7 @@ The format is based on Keep a Changelog.
 - Added `dist-gui` and `dist-tui` Cargo profiles for optimized distribution builds of the GUI and TUI frontends.
 
 ### Changed
+- GUI/TUI: Omit the currently edited or drafted entry from completion dropdown suggestions.
 - GUI release packaging now builds `dagcal-gui` with the dedicated `dist-gui` profile instead of the default `release` profile.
 - GUI: Anchored the menu bar to the top edge and the status bar to the bottom edge of the main window while keeping workspace padding inside the content area.
 
