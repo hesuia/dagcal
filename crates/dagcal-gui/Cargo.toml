@@ -11,7 +11,7 @@ publish = false
 
 [dependencies]
 dagcal-app = { path = "../dagcal-app" }
-iced = "0.14.0"
+iced = { version = "0.14.0", features = ["advanced"] }
 iced_aw = "0.14.1"
 rfd = "0.15"
 serde_json = "1.0"

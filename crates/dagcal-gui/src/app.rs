@@ -1,4 +1,4 @@
-mod actions;
+pub(crate) mod actions;
 mod document;
 mod effects;
 mod file_io;
@@ -9,17 +9,19 @@ mod windows;
 mod tests;
 
 pub(crate) use dagcal_app::EntryStateFilter;
-pub(crate) use effects::{ENTRIES_SCROLLABLE_ID, ENTRY_SEARCH_INPUT_ID, EXPRESSION_INPUT_ID};
+pub(crate) use effects::{
+    ENTRIES_SCROLLABLE_ID, ENTRY_ROW_ID_PREFIX, ENTRY_SEARCH_INPUT_ID, EXPRESSION_INPUT_ID,
+};
 pub use file_io::{LoadResult, SaveResult};
 pub(crate) use windows::{Confirmation, HelpTopic};
 
-use dagcal_app::{AppSession, EngineSnapshot, ExpressionId};
+use dagcal_app::{AppSession, EngineSnapshot, ExpressionId, SelectionDirection};
 use iced::{Size, Subscription, Task, keyboard as iced_keyboard, window};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
-pub enum Message {
+pub(crate) enum Message {
     InputChanged(String),
     OpenEntrySearch,
     EntrySearchChanged(String),
@@ -38,6 +40,7 @@ pub enum Message {
     EntryUnhovered(ExpressionId),
     RightClick(window::Id),
     Keyboard(window::Id, iced_keyboard::Event),
+    SelectionBoundsMeasured(Option<actions::SelectionScrollBounds>, SelectionDirection),
     Clear,
     Save,
     SaveAs,
@@ -126,6 +129,9 @@ impl GuiApp {
                 self.handle_keyboard_event(event)
             }
             Message::Keyboard(_, _) => effects::UiEffect::None,
+            Message::SelectionBoundsMeasured(bounds, direction) => {
+                return self.scroll_entries_by_selection_bounds(bounds, direction);
+            }
             Message::Clear => return self.clear(),
             Message::Save => return self.save(),
             Message::SaveAs => return self.save_as(),

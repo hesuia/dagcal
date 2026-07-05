@@ -482,6 +482,49 @@ fn arrow_navigation_moves_selection_and_stops_at_edges() {
 }
 
 #[test]
+fn keyboard_arrow_navigation_scrolls_moved_selection_to_edge() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    app.input.set("20".to_string());
+    app.submit_input();
+    app.selected = Some(ExpressionId::new(1));
+    app.editing = None;
+    app.input.clear();
+
+    let effect = app.handle_keyboard_event(named_key_event(key::Named::ArrowDown));
+
+    assert_eq!(app.selected, Some(ExpressionId::new(2)));
+    assert_eq!(
+        effect,
+        super::effects::UiEffect::ScrollToSelectionEdge(SelectionDirection::Next)
+    );
+
+    let effect = app.handle_keyboard_event(named_key_event(key::Named::ArrowUp));
+
+    assert_eq!(app.selected, Some(ExpressionId::new(1)));
+    assert_eq!(
+        effect,
+        super::effects::UiEffect::ScrollToSelectionEdge(SelectionDirection::Previous)
+    );
+}
+
+#[test]
+fn keyboard_arrow_navigation_does_not_scroll_when_selection_stays_at_edge() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+    app.selected = Some(ExpressionId::new(1));
+    app.editing = None;
+    app.input.clear();
+
+    let effect = app.handle_keyboard_event(named_key_event(key::Named::ArrowDown));
+
+    assert_eq!(app.selected, Some(ExpressionId::new(1)));
+    assert_eq!(effect, super::effects::UiEffect::None);
+}
+
+#[test]
 fn arrow_navigation_from_edit_cancels_edit_when_selection_changes() {
     let (mut app, _) = GuiApp::new();
     app.input.set("10".to_string());

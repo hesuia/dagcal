@@ -24,7 +24,7 @@ pub enum EntryStateFilter {
     Errors,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionDirection {
     Previous,
     Next,

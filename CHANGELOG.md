@@ -13,6 +13,7 @@ The format is based on Keep a Changelog.
 - GUI/TUI: Omit the currently edited or drafted entry from completion dropdown suggestions.
 - GUI release packaging now builds `dagcal-gui` with the dedicated `dist-gui` profile instead of the default `release` profile.
 - GUI: Anchored the menu bar to the top edge and the status bar to the bottom edge of the main window while keeping workspace padding inside the content area.
+- GUI: Keep the selected entry visible when moving through entries with Arrow Up or Arrow Down.
 
 ## [0.4.0] - 2026-07-05
 

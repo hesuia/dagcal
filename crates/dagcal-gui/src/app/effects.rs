@@ -1,9 +1,11 @@
 use super::{GuiApp, Message};
+use dagcal_app::SelectionDirection;
 use iced::{Subscription, Task, event, mouse};
 
 pub(crate) const EXPRESSION_INPUT_ID: &str = "expression-input";
 pub(crate) const ENTRY_SEARCH_INPUT_ID: &str = "entry-search-input";
 pub(crate) const ENTRIES_SCROLLABLE_ID: &str = "entries-scrollable";
+pub(crate) const ENTRY_ROW_ID_PREFIX: &str = "entry-row-";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum UiEffect {
@@ -11,6 +13,7 @@ pub(super) enum UiEffect {
     FocusInput,
     FocusEntrySearch,
     ScrollToSelection,
+    ScrollToSelectionEdge(SelectionDirection),
 }
 
 impl UiEffect {
@@ -20,6 +23,9 @@ impl UiEffect {
             Self::FocusInput => focus_expression_input(),
             Self::FocusEntrySearch => focus_entry_search_input(),
             Self::ScrollToSelection => app.scroll_entries_to_selection(),
+            Self::ScrollToSelectionEdge(direction) => {
+                app.scroll_entries_to_selection_edge(direction)
+            }
         }
     }
 }

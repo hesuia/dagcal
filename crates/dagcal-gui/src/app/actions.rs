@@ -1,6 +1,12 @@
-use super::effects::{ENTRIES_SCROLLABLE_ID, UiEffect};
+use super::effects::{ENTRIES_SCROLLABLE_ID, ENTRY_ROW_ID_PREFIX, UiEffect};
 use super::{Confirmation, GuiApp, Message};
-use iced::Task;
+use dagcal_app::SelectionDirection;
+use iced::advanced::widget::{
+    Id, Operation, operate,
+    operation::{Outcome, Scrollable},
+};
+use iced::widget::operation::AbsoluteOffset;
+use iced::{Rectangle, Task, Vector};
 
 impl GuiApp {
     pub(super) fn open_entry_search(&mut self) -> UiEffect {
@@ -130,4 +136,134 @@ impl GuiApp {
             iced::widget::operation::RelativeOffset { x: 0.0, y },
         )
     }
+
+    pub(super) fn scroll_entries_to_selection_edge(
+        &self,
+        direction: SelectionDirection,
+    ) -> Task<Message> {
+        let Some(selected) = self.session.selected else {
+            return Task::none();
+        };
+
+        if !self
+            .session
+            .filtered_entries()
+            .iter()
+            .any(|entry| entry.id == selected)
+        {
+            return Task::none();
+        }
+
+        operate(MeasureSelectionBounds::new(selected))
+            .map(move |bounds| Message::SelectionBoundsMeasured(bounds, direction))
+    }
+
+    pub(super) fn scroll_entries_by_selection_bounds(
+        &self,
+        bounds: Option<SelectionScrollBounds>,
+        direction: SelectionDirection,
+    ) -> Task<Message> {
+        let Some(bounds) = bounds else {
+            return Task::none();
+        };
+
+        let Some(delta_y) = selection_scroll_delta(bounds, direction) else {
+            return Task::none();
+        };
+
+        iced::widget::operation::scroll_by(
+            ENTRIES_SCROLLABLE_ID,
+            AbsoluteOffset { x: 0.0, y: delta_y },
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SelectionScrollBounds {
+    viewport: Rectangle,
+    selected_row: Rectangle,
+    translation: Vector,
+}
+
+struct MeasureSelectionBounds {
+    selected_row_id: Id,
+    viewport: Option<Rectangle>,
+    selected_row: Option<Rectangle>,
+    translation: Vector,
+}
+
+impl MeasureSelectionBounds {
+    fn new(selected: dagcal_app::ExpressionId) -> Self {
+        Self {
+            selected_row_id: entry_row_id(selected),
+            viewport: None,
+            selected_row: None,
+            translation: Vector::default(),
+        }
+    }
+}
+
+impl Operation<Option<SelectionScrollBounds>> for MeasureSelectionBounds {
+    fn traverse(
+        &mut self,
+        operate: &mut dyn FnMut(&mut dyn Operation<Option<SelectionScrollBounds>>),
+    ) {
+        operate(self);
+    }
+
+    fn scrollable(
+        &mut self,
+        id: Option<&Id>,
+        bounds: Rectangle,
+        _content_bounds: Rectangle,
+        translation: Vector,
+        _state: &mut dyn Scrollable,
+    ) {
+        if id == Some(&Id::new(ENTRIES_SCROLLABLE_ID)) {
+            self.viewport = Some(bounds);
+            self.translation = translation;
+        }
+    }
+
+    fn container(&mut self, id: Option<&Id>, bounds: Rectangle) {
+        if id == Some(&self.selected_row_id) {
+            self.selected_row = Some(bounds);
+        }
+    }
+
+    fn finish(&self) -> Outcome<Option<SelectionScrollBounds>> {
+        Outcome::Some(
+            self.viewport
+                .zip(self.selected_row)
+                .map(|(viewport, selected_row)| SelectionScrollBounds {
+                    viewport,
+                    selected_row,
+                    translation: self.translation,
+                }),
+        )
+    }
+}
+
+pub(super) fn entry_row_id(id: dagcal_app::ExpressionId) -> Id {
+    Id::from(format!("{ENTRY_ROW_ID_PREFIX}{id}"))
+}
+
+fn selection_scroll_delta(
+    bounds: SelectionScrollBounds,
+    direction: SelectionDirection,
+) -> Option<f32> {
+    let row_top = bounds.selected_row.y - bounds.translation.y;
+    let row_bottom = row_top + bounds.selected_row.height;
+    let viewport_top = bounds.viewport.y;
+    let viewport_bottom = bounds.viewport.y + bounds.viewport.height;
+    let outside_viewport = row_top < viewport_top || row_bottom > viewport_bottom;
+
+    if !outside_viewport {
+        return None;
+    }
+
+    Some(match direction {
+        SelectionDirection::Previous => row_top - viewport_top,
+        SelectionDirection::Next => row_bottom - viewport_bottom,
+    })
 }

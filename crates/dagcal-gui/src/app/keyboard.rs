@@ -44,13 +44,13 @@ impl GuiApp {
                 key: Key::Named(key::Named::ArrowUp),
                 ..
             } if self.session.selection_navigation_enabled() => {
-                self.session.move_selection(SelectionDirection::Previous);
+                return self.move_entry_selection(SelectionDirection::Previous);
             }
             keyboard::Event::KeyPressed {
                 key: Key::Named(key::Named::ArrowDown),
                 ..
             } if self.session.selection_navigation_enabled() => {
-                self.session.move_selection(SelectionDirection::Next);
+                return self.move_entry_selection(SelectionDirection::Next);
             }
             keyboard::Event::KeyPressed {
                 key: Key::Named(key::Named::Delete),
@@ -81,4 +81,17 @@ impl GuiApp {
 
 fn is_character_key(key: &Key, expected: &str) -> bool {
     matches!(key, Key::Character(value) if value.eq_ignore_ascii_case(expected))
+}
+
+impl GuiApp {
+    fn move_entry_selection(&mut self, direction: SelectionDirection) -> UiEffect {
+        let previous = self.session.selected;
+        self.session.move_selection(direction);
+
+        if self.session.selected != previous {
+            UiEffect::ScrollToSelectionEdge(direction)
+        } else {
+            UiEffect::None
+        }
+    }
 }

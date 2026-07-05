@@ -1,4 +1,7 @@
-use crate::app::{ENTRIES_SCROLLABLE_ID, ENTRY_SEARCH_INPUT_ID, EntryStateFilter, GuiApp, Message};
+use crate::app::{
+    ENTRIES_SCROLLABLE_ID, ENTRY_ROW_ID_PREFIX, ENTRY_SEARCH_INPUT_ID, EntryStateFilter, GuiApp,
+    Message,
+};
 use crate::formatting::{entry_expression_source, expression_spans, table_state_summary};
 use crate::style::{
     TABLE_TEXT_SIZE, context_menu_item_style, context_menu_panel_style, menu_button_style,
@@ -139,6 +142,7 @@ fn entry_row<'a>(
             .spacing(8)
             .align_y(iced::Center),
         )
+        .id(format!("{ENTRY_ROW_ID_PREFIX}{}", entry.id))
         .padding([4, 6])
         .width(Fill)
         .style(move |_| row_container_style(selected)),
