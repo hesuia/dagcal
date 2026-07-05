@@ -1,28 +1,43 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`dagcal` is a Rust Cargo workspace. The shared calculator library lives in `crates/dagcal-core/src`, with focused modules such as `parser.rs`, `eval.rs`, `dependency_graph.rs`, `persistence.rs`, and `engine/` for runtime state, dependency resolution, and recomputation. Frontends are split into `crates/dagcal-repl`, `crates/dagcal-tui`, and `crates/dagcal-gui`. Public API integration tests live in `crates/dagcal-core/tests/public_api.rs`, and benchmarks live in `crates/dagcal-core/benches`. Treat `target/` as generated output.
+
+This is a Rust 2024 Cargo workspace. Source lives under `crates/`:
+
+- `crates/dagcal-core`: parser, evaluator, dependency graph, persistence, public engine API, plus `src/syntax.pest`.
+- `crates/dagcal-app`: shared UI-agnostic application state used by frontends.
+- `crates/dagcal-repl`: line-oriented command-line frontend.
+- `crates/dagcal-tui`: terminal UI using `ratatui` and `crossterm`.
+- `crates/dagcal-gui`: desktop GUI using `iced`.
+
+Tests are colocated as Rust unit tests, with integration tests in paths such as `crates/dagcal-core/tests/public_api.rs`. Benchmarks live in `crates/dagcal-core/benches/`.
 
 ## Build, Test, and Development Commands
-- `cargo run -p dagcal-repl`: start the REPL locally.
-- `cargo run -p dagcal-tui`: start the terminal UI.
-- `cargo run -p dagcal-gui`: start the GUI frontend.
+
 - `cargo test --workspace`: run the full workspace test suite.
-- `cargo test public_api --workspace`: focus on exported engine behavior.
-- `cargo bench -p dagcal-core`: run core benchmarks.
-- `cargo fmt -- --check`: verify formatting before review.
+- `cargo test public_api --workspace`: run the public API integration tests.
+- `cargo run -p dagcal-repl`: start the REPL frontend.
+- `cargo run -p dagcal-tui`: start the terminal UI.
+- `cargo run -p dagcal-gui`: start the desktop GUI.
+- `cargo fmt -- --check`: verify Rust formatting.
 - `cargo fmt`: apply standard Rust formatting.
+- `cargo deny check`: validate dependency license and advisory policy from `deny.toml`.
+- `cargo bench -p dagcal-core`: run core engine benchmarks.
 
 ## Coding Style & Naming Conventions
-Follow standard Rust formatting with 4-space indentation and keep all code `rustfmt`-clean. Use `snake_case` for functions, modules, and test names, and `CamelCase` for types. Prefer domain-specific names such as `ExpressionId`, `EntryState`, and `restore_snapshot`. Keep modules small and responsibility-focused. Avoid unnecessary `clone` and `copy`; pass references where ownership is not required.
+
+Use standard `rustfmt` formatting and Rust 2024 idioms. Prefer focused modules that match existing boundaries: engine logic in `dagcal-core`, reusable frontend state in `dagcal-app`, and UI-specific behavior in the relevant frontend crate. Use `snake_case` for functions, modules, and variables; `PascalCase` for types and traits.
+Avoid unnecessary use of `clone` or numorous `copy`.
+Keep functions small and focused, and document public APIs with doc comments.
 
 ## Testing Guidelines
-Add unit tests next to implementation for internal behavior. Add or extend integration tests in `crates/dagcal-core/tests` when changing the public engine API. Use descriptive test names such as `public_api_reports_parse_and_cycle_errors_without_losing_valid_entries`. New engine behavior should cover success paths and failure paths, especially parse errors, cycle detection, persistence, and recomputation.
+
+Add unit tests near the behavior they cover and integration tests for public API guarantees. When changing parser, evaluation, dependency, persistence, or recomputation behavior, include tests in `dagcal-core`. For shared application actions or frontend state transitions, cover `dagcal-app` or the relevant frontend test module. Run `cargo test --workspace` before submitting changes.
 
 ## Commit & Pull Request Guidelines
-Recent commit subjects use short imperative phrases such as `Add README` and `Split frontends into crates`. Keep commits focused and use the same style. Pull requests should describe user-visible behavior, mention parser or engine invariants affected, and list verification commands run. Include REPL examples when expression syntax or runtime behavior changes.
 
-Once all the changes are complete and the tests have passed, please add a summary of the changes to `CHANGELOG.md`.
+Recent commits use short, imperative subjects such as `Split TUI into focused modules` and `Add shared dagcal-app crate`. Keep commit messages concise and scoped to one change. Pull requests should explain the motivation, summarize behavioral changes, list test commands run, and include screenshots or terminal notes for visible TUI/GUI changes. Link issues when applicable and call out compatibility or persistence-format impacts explicitly.
 
-## Architecture Notes
-The core library models expressions as a dependency graph with stable `$n` result IDs and optional user-defined names. Preserve ID stability when editing persistence, entry removal, or recomputation. Internal engine state, stores, resolvers, dependency graph code, and recomputation logic should use `ExpressionId` as the canonical identifier. Convenience APIs may accept names or `$n` strings, but should resolve to `ExpressionId` immediately and delegate to ID-specific methods.
+## Security & Configuration Tips
+
+Do not commit generated build output from `target/` or local runtime data. Keep dependency changes intentional, and update `deny.toml` only when the license or advisory policy itself needs to change.
