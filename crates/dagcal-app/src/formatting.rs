@@ -1,4 +1,5 @@
-use crate::{Engine, EntryState, EntryView, ExpressionId};
+use crate::{DagcalError, Engine, EntryState, EntryView, ExpressionId};
+use dagcal_core::ParseErrorKind;
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +23,26 @@ pub fn state_summary(state: &EntryState) -> String {
         EntryState::Value(value) => value.to_string(),
         EntryState::Error(err) => format!("error: {err}"),
     }
+}
+
+pub fn status_state_summary(state: &EntryState) -> String {
+    match state {
+        EntryState::Value(value) => value.to_string(),
+        EntryState::Error(err) => format!("error: {}", status_error_message(err)),
+    }
+}
+
+fn status_error_message(err: &DagcalError) -> String {
+    match err {
+        DagcalError::Parse(err) if err.kind == ParseErrorKind::Syntax => "syntax error".to_string(),
+        DagcalError::Parse(err) => single_line(&err.message),
+        DagcalError::Eval(err) => single_line(&err.to_string()),
+        DagcalError::Persistence(err) => single_line(&err.to_string()),
+    }
+}
+
+fn single_line(message: &str) -> String {
+    message.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub fn table_state_summary(state: &EntryState) -> String {

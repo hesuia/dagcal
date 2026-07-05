@@ -1,7 +1,7 @@
 use crate::completion::{accept_selected_completion, refresh_completion_state};
 use crate::formatting::{
     entry_expression_source, entry_reference_token, selected_compact_text, selected_error_text,
-    selected_summary_text, state_summary,
+    selected_summary_text, state_summary, status_state_summary,
 };
 use crate::{
     CompletionCandidate, CompletionDirection, CompletionState, Draft, Engine, EngineSnapshot,
@@ -201,7 +201,11 @@ impl AppSession {
             let execution = self.engine.execute(&source);
             self.refresh_affected(&execution.affected_ids);
             self.selected = Some(execution.id);
-            self.status = format!("{} = {}", execution.id, state_summary(&execution.state));
+            self.status = format!(
+                "{} = {}",
+                execution.id,
+                status_state_summary(&execution.state)
+            );
             self.editing = None;
             self.input.clear();
             SessionChange::ScrollToSelection
@@ -547,7 +551,7 @@ impl AppSession {
         self.remove_redirected_draft(id, result.execution.id);
         let id = result.execution.id;
         self.selected = Some(id);
-        self.status = format!("{id} = {}", state_summary(&result.execution.state));
+        self.status = format!("{id} = {}", status_state_summary(&result.execution.state));
         self.editing = None;
         self.input.clear();
         self.close_completions();
@@ -590,7 +594,7 @@ impl AppSession {
 
     fn entry_status(&self, id: ExpressionId) -> String {
         match self.engine.entry_by_id(id) {
-            Some(entry) => format!("{id} = {}", state_summary(&entry.state)),
+            Some(entry) => format!("{id} = {}", status_state_summary(&entry.state)),
             None => format!("{id} updated"),
         }
     }
@@ -670,6 +674,27 @@ mod tests {
         assert_eq!(session.entries.len(), 1);
         assert_eq!(session.selected, Some(ExpressionId::new(1)));
         assert_eq!(session.status, "$1 = 10");
+    }
+
+    #[test]
+    fn submit_input_keeps_syntax_error_status_single_line() {
+        let mut session = AppSession::new();
+
+        session.input.set("1 +".to_string());
+        session.submit_input();
+
+        assert_eq!(session.status, "$1 = error: syntax error");
+        assert!(!session.status.contains('\n'));
+    }
+
+    #[test]
+    fn submit_input_keeps_eval_error_status_compact() {
+        let mut session = AppSession::new();
+
+        session.input.set("a + 1".to_string());
+        session.submit_input();
+
+        assert_eq!(session.status, "$1 = error: unknown reference `a`");
     }
 
     #[test]
