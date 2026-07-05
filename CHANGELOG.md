@@ -6,6 +6,12 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+- Added `dist-gui` and `dist-tui` Cargo profiles for optimized distribution builds of the GUI and TUI frontends.
+
+### Changed
+- GUI release packaging now builds `dagcal-gui` with the dedicated `dist-gui` profile instead of the default `release` profile.
+
 ## [0.4.0] - 2026-07-05
 
 ### Added

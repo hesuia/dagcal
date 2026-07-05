@@ -16,3 +16,15 @@ members = [
     "crates/dagcal-tui",
 ]
 resolver = "3"
+
+[profile.dist]
+inherits = "release"
+codegen-units = 1
+lto = "fat"
+strip = "symbols"
+
+[profile.dist-gui]
+inherits = "dist"
+
+[profile.dist-tui]
+inherits = "dist"

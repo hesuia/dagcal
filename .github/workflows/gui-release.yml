@@ -77,13 +77,13 @@ jobs:
             libxkbcommon-dev
 
       - name: Build GUI
-        run: cargo build -p dagcal-gui --release
+        run: cargo build -p dagcal-gui --profile dist-gui
 
       - name: Package Linux binary
         if: runner.os == 'Linux'
         run: |
           mkdir package
-          cp "target/release/${{ matrix.binary_name }}" package/
+          cp "target/dist-gui/${{ matrix.binary_name }}" package/
           cp LICENSE package/
           cd package
           zip -r "../${{ matrix.artifact_name }}.zip" .
@@ -93,7 +93,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory package | Out-Null
-          Copy-Item "target/release/${{ matrix.binary_name }}" package/
+          Copy-Item "target/dist-gui/${{ matrix.binary_name }}" package/
           Copy-Item LICENSE package/
           Compress-Archive -Path package/* -DestinationPath "${{ matrix.artifact_name }}.zip"
 
