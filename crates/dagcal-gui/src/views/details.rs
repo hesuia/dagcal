@@ -1,35 +1,22 @@
 use crate::app::{GuiApp, Message};
 use crate::style::{DETAIL_HEIGHT, fixed_line, fixed_scroll_text};
-use iced::widget::{button, column, container, row, scrollable, text};
+use iced::widget::{button, column, container, scrollable, text};
 use iced::{Element, Fill, Length, window};
 
 impl GuiApp {
     pub(super) fn selected_detail_view(&self) -> Element<'_, Message> {
         let Some(id) = self.session.selected else {
-            return fixed_line(
-                text("Details: select an entry").size(14),
-                DETAIL_HEIGHT * 2.0,
-            );
+            return fixed_line(text("Details: select an entry").size(14), DETAIL_HEIGHT);
         };
 
         let Some(entry) = self.session.entries.iter().find(|entry| entry.id == id) else {
             return fixed_line(
                 text("Details: selected entry is not available").size(14),
-                DETAIL_HEIGHT * 2.0,
+                DETAIL_HEIGHT,
             );
         };
 
-        row![
-            container(fixed_scroll_text(
-                &self.selected_compact_text(id, entry),
-                DETAIL_HEIGHT * 2.0
-            ))
-            .width(Length::FillPortion(4)),
-            button("Details...").on_press(Message::ShowDetails(id)),
-        ]
-        .spacing(12)
-        .align_y(iced::Center)
-        .into()
+        fixed_scroll_text(&self.selected_compact_text(id, entry), DETAIL_HEIGHT)
     }
 
     pub(super) fn details_window_view(&self, window: window::Id) -> Element<'_, Message> {
