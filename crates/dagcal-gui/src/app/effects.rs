@@ -6,6 +6,8 @@ pub(crate) const EXPRESSION_INPUT_ID: &str = "expression-input";
 pub(crate) const ENTRY_SEARCH_INPUT_ID: &str = "entry-search-input";
 pub(crate) const ENTRIES_SCROLLABLE_ID: &str = "entries-scrollable";
 pub(crate) const ENTRY_ROW_ID_PREFIX: &str = "entry-row-";
+pub(crate) const COMPLETIONS_SCROLLABLE_ID: &str = "completions-scrollable";
+pub(crate) const COMPLETION_ROW_ID_PREFIX: &str = "completion-row-";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum UiEffect {
@@ -14,6 +16,7 @@ pub(super) enum UiEffect {
     FocusEntrySearch,
     ScrollToSelection,
     ScrollToSelectionEdge(SelectionDirection),
+    ScrollToCompletionSelectionEdge(dagcal_app::CompletionDirection),
 }
 
 impl UiEffect {
@@ -25,6 +28,9 @@ impl UiEffect {
             Self::ScrollToSelection => app.scroll_entries_to_selection(),
             Self::ScrollToSelectionEdge(direction) => {
                 app.scroll_entries_to_selection_edge(direction)
+            }
+            Self::ScrollToCompletionSelectionEdge(direction) => {
+                app.scroll_completion_to_selection_edge(direction)
             }
         }
     }

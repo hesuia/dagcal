@@ -17,6 +17,7 @@ The format is based on Keep a Changelog.
 - GUI: Removed the inline Details button and compacted the selected-entry preview area.
 - GUI: Keep the entries table header visible while scrolling entry rows.
 - GUI: Make the expression completion dropdown scrollable when candidates exceed the visible area.
+- GUI: Keep the selected completion candidate visible while moving through the dropdown with Arrow Up or Arrow Down.
 
 ## [0.4.0] - 2026-07-05
 

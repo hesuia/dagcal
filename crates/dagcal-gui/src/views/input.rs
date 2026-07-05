@@ -1,4 +1,6 @@
-use crate::app::{EXPRESSION_INPUT_ID, GuiApp, Message};
+use crate::app::{
+    COMPLETION_ROW_ID_PREFIX, COMPLETIONS_SCROLLABLE_ID, EXPRESSION_INPUT_ID, GuiApp, Message,
+};
 use crate::formatting::resolved_source;
 use crate::style::{
     DETAIL_HEIGHT, completion_item_style, completion_panel_style, fixed_scroll_text,
@@ -93,6 +95,7 @@ impl GuiApp {
             candidates = candidates.push(
                 button(
                     container(row)
+                        .id(format!("{COMPLETION_ROW_ID_PREFIX}{index}"))
                         .padding([5, 8])
                         .width(Fill)
                         .style(move |_| completion_item_style(selected == Some(index))),
@@ -103,7 +106,7 @@ impl GuiApp {
             );
         }
 
-        container(scrollable(candidates))
+        container(scrollable(candidates).id(COMPLETIONS_SCROLLABLE_ID))
             .padding(5)
             .width(Fill)
             .style(|_| completion_panel_style())

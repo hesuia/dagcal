@@ -9,15 +9,15 @@ impl GuiApp {
             keyboard::Event::KeyPressed {
                 key: Key::Named(key::Named::ArrowUp),
                 ..
-            } if self.session.completion_is_open() => self
-                .session
-                .move_completion_selection(CompletionDirection::Previous),
+            } if self.session.completion_is_open() => {
+                return self.move_completion_selection(CompletionDirection::Previous);
+            }
             keyboard::Event::KeyPressed {
                 key: Key::Named(key::Named::ArrowDown),
                 ..
-            } if self.session.completion_is_open() => self
-                .session
-                .move_completion_selection(CompletionDirection::Next),
+            } if self.session.completion_is_open() => {
+                return self.move_completion_selection(CompletionDirection::Next);
+            }
             keyboard::Event::KeyPressed {
                 key: Key::Named(key::Named::Tab),
                 ..
@@ -90,6 +90,17 @@ impl GuiApp {
 
         if self.session.selected != previous {
             UiEffect::ScrollToSelectionEdge(direction)
+        } else {
+            UiEffect::None
+        }
+    }
+
+    fn move_completion_selection(&mut self, direction: CompletionDirection) -> UiEffect {
+        let previous = self.session.selected_completion_index();
+        self.session.move_completion_selection(direction);
+
+        if self.session.selected_completion_index() != previous {
+            UiEffect::ScrollToCompletionSelectionEdge(direction)
         } else {
             UiEffect::None
         }

@@ -1,7 +1,7 @@
 use super::*;
 use dagcal_app::{
-    CompletionKind, Draft, EngineSnapshot, EntryState, ExpressionId, Number, PersistedEntry,
-    SelectionDirection,
+    CompletionDirection, CompletionKind, Draft, EngineSnapshot, EntryState, ExpressionId, Number,
+    PersistedEntry, SelectionDirection,
 };
 use iced::keyboard::{self, Key, key};
 use std::path::PathBuf;
@@ -103,11 +103,34 @@ fn completion_finds_result_references_and_moves_selection() {
     let _ = app.update(Message::InputChanged("$".to_string()));
     assert_eq!(app.selected_completion_index(), Some(0));
 
-    app.handle_keyboard_event(named_key_event(key::Named::ArrowDown));
+    let effect = app.handle_keyboard_event(named_key_event(key::Named::ArrowDown));
     assert_eq!(app.selected_completion_index(), Some(1));
+    assert_eq!(
+        effect,
+        super::effects::UiEffect::ScrollToCompletionSelectionEdge(CompletionDirection::Next)
+    );
 
-    app.handle_keyboard_event(named_key_event(key::Named::ArrowUp));
+    let effect = app.handle_keyboard_event(named_key_event(key::Named::ArrowUp));
     assert_eq!(app.selected_completion_index(), Some(0));
+    assert_eq!(
+        effect,
+        super::effects::UiEffect::ScrollToCompletionSelectionEdge(CompletionDirection::Previous)
+    );
+}
+
+#[test]
+fn completion_arrow_navigation_does_not_scroll_when_selection_stays_at_edge() {
+    let (mut app, _) = GuiApp::new();
+    app.input.set("10".to_string());
+    app.submit_input();
+
+    let _ = app.update(Message::InputChanged("$".to_string()));
+    assert_eq!(app.selected_completion_index(), Some(0));
+
+    let effect = app.handle_keyboard_event(named_key_event(key::Named::ArrowUp));
+
+    assert_eq!(app.selected_completion_index(), Some(0));
+    assert_eq!(effect, super::effects::UiEffect::None);
 }
 
 #[test]

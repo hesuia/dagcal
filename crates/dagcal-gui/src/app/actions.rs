@@ -1,6 +1,9 @@
-use super::effects::{ENTRIES_SCROLLABLE_ID, ENTRY_ROW_ID_PREFIX, UiEffect};
+use super::effects::{
+    COMPLETION_ROW_ID_PREFIX, COMPLETIONS_SCROLLABLE_ID, ENTRIES_SCROLLABLE_ID,
+    ENTRY_ROW_ID_PREFIX, UiEffect,
+};
 use super::{Confirmation, GuiApp, Message};
-use dagcal_app::SelectionDirection;
+use dagcal_app::{CompletionDirection, SelectionDirection};
 use iced::advanced::widget::{
     Id, Operation, operate,
     operation::{Outcome, Scrollable},
@@ -154,8 +157,11 @@ impl GuiApp {
             return Task::none();
         }
 
-        operate(MeasureSelectionBounds::new(selected))
-            .map(move |bounds| Message::SelectionBoundsMeasured(bounds, direction))
+        operate(MeasureSelectionBounds::new(
+            ENTRIES_SCROLLABLE_ID,
+            entry_row_id(selected),
+        ))
+        .map(move |bounds| Message::SelectionBoundsMeasured(bounds, direction))
     }
 
     pub(super) fn scroll_entries_by_selection_bounds(
@@ -167,12 +173,50 @@ impl GuiApp {
             return Task::none();
         };
 
-        let Some(delta_y) = selection_scroll_delta(bounds, direction) else {
+        let Some(delta_y) = selection_scroll_delta(bounds, ScrollDirection::from(direction)) else {
             return Task::none();
         };
 
         iced::widget::operation::scroll_by(
             ENTRIES_SCROLLABLE_ID,
+            AbsoluteOffset { x: 0.0, y: delta_y },
+        )
+    }
+
+    pub(super) fn scroll_completion_to_selection_edge(
+        &self,
+        direction: CompletionDirection,
+    ) -> Task<Message> {
+        let Some(selected) = self.session.selected_completion_index() else {
+            return Task::none();
+        };
+
+        if selected >= self.session.completion_candidates().len() {
+            return Task::none();
+        }
+
+        operate(MeasureSelectionBounds::new(
+            COMPLETIONS_SCROLLABLE_ID,
+            completion_row_id(selected),
+        ))
+        .map(move |bounds| Message::CompletionBoundsMeasured(bounds, direction))
+    }
+
+    pub(super) fn scroll_completion_by_selection_bounds(
+        &self,
+        bounds: Option<SelectionScrollBounds>,
+        direction: CompletionDirection,
+    ) -> Task<Message> {
+        let Some(bounds) = bounds else {
+            return Task::none();
+        };
+
+        let Some(delta_y) = selection_scroll_delta(bounds, ScrollDirection::from(direction)) else {
+            return Task::none();
+        };
+
+        iced::widget::operation::scroll_by(
+            COMPLETIONS_SCROLLABLE_ID,
             AbsoluteOffset { x: 0.0, y: delta_y },
         )
     }
@@ -186,6 +230,7 @@ pub(crate) struct SelectionScrollBounds {
 }
 
 struct MeasureSelectionBounds {
+    scrollable_id: Id,
     selected_row_id: Id,
     viewport: Option<Rectangle>,
     selected_row: Option<Rectangle>,
@@ -193,9 +238,10 @@ struct MeasureSelectionBounds {
 }
 
 impl MeasureSelectionBounds {
-    fn new(selected: dagcal_app::ExpressionId) -> Self {
+    fn new(scrollable_id: &'static str, selected_row_id: Id) -> Self {
         Self {
-            selected_row_id: entry_row_id(selected),
+            scrollable_id: Id::new(scrollable_id),
+            selected_row_id,
             viewport: None,
             selected_row: None,
             translation: Vector::default(),
@@ -219,7 +265,7 @@ impl Operation<Option<SelectionScrollBounds>> for MeasureSelectionBounds {
         translation: Vector,
         _state: &mut dyn Scrollable,
     ) {
-        if id == Some(&Id::new(ENTRIES_SCROLLABLE_ID)) {
+        if id == Some(&self.scrollable_id) {
             self.viewport = Some(bounds);
             self.translation = translation;
         }
@@ -248,9 +294,37 @@ pub(super) fn entry_row_id(id: dagcal_app::ExpressionId) -> Id {
     Id::from(format!("{ENTRY_ROW_ID_PREFIX}{id}"))
 }
 
+pub(super) fn completion_row_id(index: usize) -> Id {
+    Id::from(format!("{COMPLETION_ROW_ID_PREFIX}{index}"))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ScrollDirection {
+    Previous,
+    Next,
+}
+
+impl From<SelectionDirection> for ScrollDirection {
+    fn from(direction: SelectionDirection) -> Self {
+        match direction {
+            SelectionDirection::Previous => Self::Previous,
+            SelectionDirection::Next => Self::Next,
+        }
+    }
+}
+
+impl From<CompletionDirection> for ScrollDirection {
+    fn from(direction: CompletionDirection) -> Self {
+        match direction {
+            CompletionDirection::Previous => Self::Previous,
+            CompletionDirection::Next => Self::Next,
+        }
+    }
+}
+
 fn selection_scroll_delta(
     bounds: SelectionScrollBounds,
-    direction: SelectionDirection,
+    direction: ScrollDirection,
 ) -> Option<f32> {
     let row_top = bounds.selected_row.y - bounds.translation.y;
     let row_bottom = row_top + bounds.selected_row.height;
@@ -263,7 +337,7 @@ fn selection_scroll_delta(
     }
 
     Some(match direction {
-        SelectionDirection::Previous => row_top - viewport_top,
-        SelectionDirection::Next => row_bottom - viewport_bottom,
+        ScrollDirection::Previous => row_top - viewport_top,
+        ScrollDirection::Next => row_bottom - viewport_bottom,
     })
 }

@@ -10,12 +10,15 @@ mod tests;
 
 pub(crate) use dagcal_app::EntryStateFilter;
 pub(crate) use effects::{
-    ENTRIES_SCROLLABLE_ID, ENTRY_ROW_ID_PREFIX, ENTRY_SEARCH_INPUT_ID, EXPRESSION_INPUT_ID,
+    COMPLETION_ROW_ID_PREFIX, COMPLETIONS_SCROLLABLE_ID, ENTRIES_SCROLLABLE_ID,
+    ENTRY_ROW_ID_PREFIX, ENTRY_SEARCH_INPUT_ID, EXPRESSION_INPUT_ID,
 };
 pub use file_io::{LoadResult, SaveResult};
 pub(crate) use windows::{Confirmation, HelpTopic};
 
-use dagcal_app::{AppSession, EngineSnapshot, ExpressionId, SelectionDirection};
+use dagcal_app::{
+    AppSession, CompletionDirection, EngineSnapshot, ExpressionId, SelectionDirection,
+};
 use iced::{Size, Subscription, Task, keyboard as iced_keyboard, window};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
@@ -41,6 +44,7 @@ pub(crate) enum Message {
     RightClick(window::Id),
     Keyboard(window::Id, iced_keyboard::Event),
     SelectionBoundsMeasured(Option<actions::SelectionScrollBounds>, SelectionDirection),
+    CompletionBoundsMeasured(Option<actions::SelectionScrollBounds>, CompletionDirection),
     Clear,
     Save,
     SaveAs,
@@ -131,6 +135,9 @@ impl GuiApp {
             Message::Keyboard(_, _) => effects::UiEffect::None,
             Message::SelectionBoundsMeasured(bounds, direction) => {
                 return self.scroll_entries_by_selection_bounds(bounds, direction);
+            }
+            Message::CompletionBoundsMeasured(bounds, direction) => {
+                return self.scroll_completion_by_selection_bounds(bounds, direction);
             }
             Message::Clear => return self.clear(),
             Message::Save => return self.save(),
