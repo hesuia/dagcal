@@ -37,6 +37,7 @@ Add unit tests near the behavior they cover and integration tests for public API
 ## Commit & Pull Request Guidelines
 
 Recent commits use short, imperative subjects such as `Split TUI into focused modules` and `Add shared dagcal-app crate`. Keep commit messages concise and scoped to one change. Pull requests should explain the motivation, summarize behavioral changes, list test commands run, and include screenshots or terminal notes for visible TUI/GUI changes. Link issues when applicable and call out compatibility or persistence-format impacts explicitly.
+If you make any changes, please add the details to `CHANGELOG.md`.
 
 ## Security & Configuration Tips
 
