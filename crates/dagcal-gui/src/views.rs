@@ -50,21 +50,26 @@ impl GuiApp {
     }
 
     fn main_window_view(&self) -> Element<'_, Message> {
-        let content = column![
-            self.menu_bar_view(),
+        let workspace = column![
             self.entries_view(),
             rule::horizontal(1),
             self.input_view(),
             self.selected_detail_view(),
         ]
-        .spacing(12);
+        .spacing(12)
+        .padding(16)
+        .height(Fill);
 
-        let content = content.push(self.status_bar_view());
+        let content = column![
+            self.menu_bar_view(),
+            container(workspace).width(Fill).height(Fill),
+            self.status_bar_view(),
+        ]
+        .spacing(0)
+        .width(Fill)
+        .height(Fill);
 
-        container(content.padding(16))
-            .width(Fill)
-            .height(Fill)
-            .into()
+        container(content).width(Fill).height(Fill).into()
     }
 
     fn status_bar_view(&self) -> Element<'_, Message> {

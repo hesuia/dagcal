@@ -85,7 +85,7 @@ pub(crate) fn status_bar_style() -> iced::widget::container::Style {
         .background(Background::Color(Color::from_rgb(0.10, 0.12, 0.14)))
         .border(
             Border::default()
-                .rounded(4)
+                .rounded(0)
                 .width(1)
                 .color(Color::from_rgb(0.23, 0.28, 0.31)),
         )
@@ -129,7 +129,7 @@ pub(crate) fn menu_bar_style(_: &iced::Theme, _: Status) -> iced_aw::menu::Style
     iced_aw::menu::Style {
         bar_background: Background::Color(Color::from_rgb(0.10, 0.12, 0.14)),
         bar_border: Border::default()
-            .rounded(4)
+            .rounded(0)
             .width(1)
             .color(Color::from_rgb(0.23, 0.28, 0.31)),
         menu_background: Background::Color(Color::from_rgb(0.13, 0.15, 0.17)),
