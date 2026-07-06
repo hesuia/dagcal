@@ -657,11 +657,13 @@ fn public_api_exposes_completion_items_for_frontends() {
         item.kind == CompletionKind::Entry
             && item.label == "subtotal"
             && item.detail == Some(subtotal.to_string())
+            && item.result.as_deref() == Some("100")
     }));
     assert!(items.iter().any(|item| {
         item.kind == CompletionKind::Result
             && item.label == plain.to_string()
             && item.detail.is_none()
+            && item.result.as_deref() == Some("200")
     }));
     assert!(
         items

@@ -17,6 +17,7 @@ pub struct CompletionToken {
 pub struct CompletionCandidate {
     pub label: String,
     pub detail: Option<String>,
+    pub result: Option<String>,
     pub insert: String,
     pub kind: CompletionKind,
 }
@@ -166,6 +167,7 @@ fn completion_candidate(item: CompletionItem) -> CompletionCandidate {
     CompletionCandidate {
         label: item.label,
         detail: item.detail,
+        result: item.result,
         insert,
         kind: item.kind,
     }
@@ -230,6 +232,7 @@ mod tests {
         let state = CompletionState::for_source("sub", engine.completion_items());
 
         assert_eq!(state.items[0].label, "subtotal");
+        assert_eq!(state.items[0].result.as_deref(), Some("10"));
         assert_eq!(
             state.token_range,
             Some(CompletionToken { start: 0, end: 3 })
@@ -244,6 +247,12 @@ mod tests {
         let state = CompletionState::for_source("$", engine.completion_items());
 
         assert!(state.items.iter().any(|item| item.insert == "$1"));
+        assert!(
+            state
+                .items
+                .iter()
+                .any(|item| item.insert == "$1" && item.result.as_deref() == Some("10"))
+        );
     }
 
     #[test]

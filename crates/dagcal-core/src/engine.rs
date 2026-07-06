@@ -148,12 +148,12 @@ impl Session {
         let mut items = Vec::new();
 
         for (name, id) in self.entries.named_entries() {
-            items.push(CompletionItem::entry(name, id));
+            items.push(CompletionItem::entry(name, id, self.completion_result(id)));
         }
 
         for id in self.entries.sorted_ids() {
             let name = self.entries.name_for_id(id).map(String::as_str);
-            items.push(CompletionItem::result(id, name));
+            items.push(CompletionItem::result(id, name, self.completion_result(id)));
         }
 
         for name in self.runtime.constant_names() {
@@ -165,6 +165,17 @@ impl Session {
         }
 
         items
+    }
+
+    fn completion_result(&self, id: ExpressionId) -> Option<String> {
+        self.state(id).map(completion_result_summary)
+    }
+}
+
+fn completion_result_summary(state: &EntryState) -> String {
+    match state {
+        EntryState::Value(value) => value.to_string(),
+        EntryState::Error(err) => format!("error: {err}"),
     }
 }
 

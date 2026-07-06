@@ -121,22 +121,26 @@ pub struct CompletionItem {
     pub kind: CompletionKind,
     /// Optional display detail such as an ID or function signature.
     pub detail: Option<String>,
+    /// Optional current result for entry-backed candidates.
+    pub result: Option<String>,
 }
 
 impl CompletionItem {
-    pub(crate) fn entry(label: String, id: ExpressionId) -> Self {
+    pub(crate) fn entry(label: String, id: ExpressionId, result: Option<String>) -> Self {
         Self {
             label,
             kind: CompletionKind::Entry,
             detail: Some(id.to_string()),
+            result,
         }
     }
 
-    pub(crate) fn result(id: ExpressionId, name: Option<&str>) -> Self {
+    pub(crate) fn result(id: ExpressionId, name: Option<&str>, result: Option<String>) -> Self {
         Self {
             label: id.to_string(),
             kind: CompletionKind::Result,
             detail: name.map(str::to_string),
+            result,
         }
     }
 
@@ -145,6 +149,7 @@ impl CompletionItem {
             label,
             kind: CompletionKind::Constant,
             detail: None,
+            result: None,
         }
     }
 
@@ -153,6 +158,7 @@ impl CompletionItem {
             label,
             kind: CompletionKind::Function,
             detail: Some(signature.to_string()),
+            result: None,
         }
     }
 }

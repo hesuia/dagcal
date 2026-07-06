@@ -80,6 +80,7 @@ impl GuiApp {
                 .as_deref()
                 .map(|detail| format!("  {detail}"))
                 .unwrap_or_default();
+            let result = candidate.result.as_deref().unwrap_or_default();
             let row = row![
                 text(kind_label(candidate.kind))
                     .size(12)
@@ -88,6 +89,7 @@ impl GuiApp {
                     .size(14)
                     .width(Length::FillPortion(2)),
                 text(detail).size(12).width(Length::FillPortion(2)),
+                text(result).size(12).width(Length::FillPortion(2)),
             ]
             .spacing(8)
             .align_y(iced::Center);

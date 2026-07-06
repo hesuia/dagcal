@@ -155,10 +155,15 @@ fn render_completions(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::R
                     .as_deref()
                     .map(|detail| format!("  {detail}"))
                     .unwrap_or_default();
+                let result = candidate
+                    .result
+                    .as_deref()
+                    .map(|result| format!("  {result}"))
+                    .unwrap_or_default();
                 Line::from(vec![
                     Span::styled(marker, Style::default().fg(Color::Yellow)),
                     Span::styled(kind_label(candidate.kind), Style::default().fg(Color::Cyan)),
-                    Span::raw(format!("  {}{}", candidate.label, detail)),
+                    Span::raw(format!("  {}{}{}", candidate.label, detail, result)),
                 ])
             })
             .collect()
