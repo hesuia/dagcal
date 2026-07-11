@@ -9,9 +9,6 @@ pub enum AppEffect {
     ScrollToSelection,
 }
 
-/// Compatibility name for effects returned by focused session methods.
-pub type SessionChange = AppEffect;
-
 /// Entry-state predicate used by search results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryStateFilter {
@@ -30,7 +27,13 @@ pub enum SelectionDirection {
 /// Frontend-independent application command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppAction {
+    /// Replaces the frontend-visible status without changing calculation state.
+    SetStatus(String),
+    /// Resets the editor to an empty, non-editing input without creating an entry.
+    ResetInput,
     InputChanged(String),
+    /// Updates editor text without materializing a GUI-style draft row.
+    InputEdited(String),
     OpenEntrySearch,
     CloseEntrySearch,
     EntrySearchChanged(String),
@@ -47,6 +50,7 @@ pub enum AppAction {
     InsertConstant(String),
     InsertFunction(String),
     SelectEntry(ExpressionId),
+    ClearSelection,
     SetHoveredEntry(ExpressionId),
     ClearHoveredEntry(ExpressionId),
     SelectHoveredEntry,
@@ -57,4 +61,6 @@ pub enum AppAction {
     MoveCompletion(CompletionDirection),
     AcceptCompletion(usize),
     CloseCompletions,
+    /// Removes an empty draft entry while preserving the current status.
+    DiscardEmptyDraft,
 }

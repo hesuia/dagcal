@@ -6,23 +6,22 @@ use crate::formatting::{
 use crate::{
     AppAction, AppEffect, CompletionCandidate, CompletionDirection, CompletionState, Draft, Engine,
     EngineSnapshot, EntryState, EntryStateFilter, EntryView, ExpressionId, SelectionDirection,
-    SessionChange,
 };
 use std::collections::BTreeSet;
 
 pub struct AppSession {
-    pub engine: Engine,
-    pub entries: Vec<EntryView>,
-    pub entry_search_open: bool,
-    pub entry_search_query: String,
-    pub entry_state_filter: EntryStateFilter,
-    pub input: Draft,
-    pub editing: Option<ExpressionId>,
-    pub draft_entry: Option<ExpressionId>,
-    pub selected: Option<ExpressionId>,
-    pub hovered_entry: Option<ExpressionId>,
-    pub status: String,
-    pub completion: CompletionState,
+    engine: Engine,
+    entries: Vec<EntryView>,
+    entry_search_open: bool,
+    entry_search_query: String,
+    entry_state_filter: EntryStateFilter,
+    input: Draft,
+    editing: Option<ExpressionId>,
+    draft_entry: Option<ExpressionId>,
+    selected: Option<ExpressionId>,
+    hovered_entry: Option<ExpressionId>,
+    status: String,
+    completion: CompletionState,
 }
 
 impl Default for AppSession {
@@ -52,7 +51,13 @@ impl AppSession {
     /// Applies one frontend-independent action and returns requested UI effects.
     pub fn dispatch(&mut self, action: AppAction) -> Vec<AppEffect> {
         let effect = match action {
+            AppAction::SetStatus(status) => {
+                self.status = status;
+                AppEffect::None
+            }
+            AppAction::ResetInput => self.reset_input(),
             AppAction::InputChanged(value) => self.input_changed(value),
+            AppAction::InputEdited(value) => self.input_edited(value),
             AppAction::OpenEntrySearch => self.open_entry_search(),
             AppAction::CloseEntrySearch => self.close_entry_search(),
             AppAction::EntrySearchChanged(value) => self.entry_search_changed(value),
@@ -69,6 +74,10 @@ impl AppSession {
             AppAction::InsertConstant(name) => self.insert_constant(name),
             AppAction::InsertFunction(name) => self.insert_function(name),
             AppAction::SelectEntry(id) => self.select_entry(id),
+            AppAction::ClearSelection => {
+                self.selected = None;
+                AppEffect::None
+            }
             AppAction::SetHoveredEntry(id) => self.set_hovered_entry(id),
             AppAction::ClearHoveredEntry(id) => self.clear_hovered_entry(id),
             AppAction::SelectHoveredEntry => self.select_hovered_entry(),
@@ -91,6 +100,7 @@ impl AppSession {
                 self.close_completions();
                 AppEffect::None
             }
+            AppAction::DiscardEmptyDraft => self.discard_empty_draft(),
         };
 
         (!matches!(effect, AppEffect::None))
@@ -114,11 +124,6 @@ impl AppSession {
         self.engine.snapshot()
     }
 
-    /// Returns the calculation engine used by this session.
-    pub fn engine(&self) -> &Engine {
-        &self.engine
-    }
-
     /// Returns cached entries in stable-ID order.
     pub fn entries(&self) -> &[EntryView] {
         &self.entries
@@ -139,6 +144,61 @@ impl AppSession {
         &self.status
     }
 
+    /// Returns whether entry search controls are active.
+    pub fn entry_search_is_open(&self) -> bool {
+        self.entry_search_open
+    }
+
+    /// Returns the current entry-search query.
+    pub fn entry_search_query(&self) -> &str {
+        &self.entry_search_query
+    }
+
+    /// Returns the active entry-state filter.
+    pub fn entry_state_filter(&self) -> EntryStateFilter {
+        self.entry_state_filter
+    }
+
+    /// Returns the entry currently being edited.
+    pub fn editing_id(&self) -> Option<ExpressionId> {
+        self.editing
+    }
+
+    /// Returns the transient empty entry used by the editor.
+    pub fn draft_entry_id(&self) -> Option<ExpressionId> {
+        self.draft_entry
+    }
+
+    /// Returns the entry currently tracked by pointer hover.
+    pub fn hovered_entry_id(&self) -> Option<ExpressionId> {
+        self.hovered_entry
+    }
+
+    /// Returns an entry by stable ID.
+    pub fn entry(&self, id: ExpressionId) -> Option<&EntryView> {
+        self.entries.iter().find(|entry| entry.id == id)
+    }
+
+    /// Returns whether undo history is available.
+    pub fn can_undo(&self) -> bool {
+        self.engine.can_undo()
+    }
+
+    /// Returns whether redo history is available.
+    pub fn can_redo(&self) -> bool {
+        self.engine.can_redo()
+    }
+
+    /// Evaluates a statement without mutating the session.
+    pub fn preview(&self, source: &str) -> Result<crate::Number, crate::DagcalError> {
+        self.engine.eval_statement_once(source)
+    }
+
+    /// Returns completion items registered by the engine.
+    pub fn available_completions(&self) -> Vec<crate::CompletionItem> {
+        self.engine.completion_items()
+    }
+
     pub fn restore_snapshot(
         &mut self,
         snapshot: EngineSnapshot,
@@ -153,6 +213,28 @@ impl AppSession {
         self.engine.snapshot() != *snapshot
     }
 
+    fn reset_input(&mut self) -> AppEffect {
+        self.editing = None;
+        self.input.clear();
+        self.close_completions();
+        AppEffect::None
+    }
+
+    fn discard_empty_draft(&mut self) -> AppEffect {
+        let Some(id) = self.draft_entry.take() else {
+            return AppEffect::None;
+        };
+        if self
+            .entry(id)
+            .is_some_and(|entry| entry.source.trim().is_empty())
+        {
+            let status = std::mem::take(&mut self.status);
+            self.perform_delete_entry(id);
+            self.status = status;
+        }
+        AppEffect::None
+    }
+
     pub fn completion_candidates(&self) -> &[CompletionCandidate] {
         self.completion.items()
     }
@@ -165,7 +247,7 @@ impl AppSession {
         self.completion.is_open()
     }
 
-    pub fn refresh_completions(&mut self) {
+    fn refresh_completions(&mut self) {
         let current_entry_id = self.current_input_entry_id();
         refresh_completion_state(
             &mut self.completion,
@@ -175,75 +257,80 @@ impl AppSession {
         );
     }
 
-    pub fn close_completions(&mut self) {
+    fn close_completions(&mut self) {
         self.completion.clear();
     }
 
-    pub fn move_completion_selection(&mut self, direction: CompletionDirection) {
+    fn move_completion_selection(&mut self, direction: CompletionDirection) {
         self.completion.move_selection(direction);
     }
 
-    pub fn accept_selected_completion(&mut self) -> bool {
+    fn accept_selected_completion(&mut self) -> bool {
         let Some(change) =
             accept_selected_completion(&mut self.completion, &mut self.input, &mut self.status)
         else {
             return false;
         };
-        if change == SessionChange::FocusInput {
+        if change == AppEffect::FocusInput {
             self.ensure_empty_draft_entry();
         }
         true
     }
 
-    pub fn accept_completion(&mut self, index: usize) -> bool {
+    fn accept_completion(&mut self, index: usize) -> bool {
         if self.completion.select(index) {
             return self.accept_selected_completion();
         }
         false
     }
 
-    pub fn open_entry_search(&mut self) -> SessionChange {
+    fn open_entry_search(&mut self) -> AppEffect {
         self.close_completions();
         self.entry_search_open = true;
-        SessionChange::FocusEntrySearch
+        AppEffect::FocusEntrySearch
     }
 
-    pub fn close_entry_search(&mut self) -> SessionChange {
+    fn close_entry_search(&mut self) -> AppEffect {
         self.reset_entry_filters();
-        SessionChange::None
+        AppEffect::None
     }
 
-    pub fn entry_search_changed(&mut self, value: String) -> SessionChange {
+    fn entry_search_changed(&mut self, value: String) -> AppEffect {
         self.entry_search_open = true;
         self.entry_search_query = value;
-        SessionChange::None
+        AppEffect::None
     }
 
-    pub fn entry_state_filter_changed(&mut self, filter: EntryStateFilter) -> SessionChange {
+    fn entry_state_filter_changed(&mut self, filter: EntryStateFilter) -> AppEffect {
         self.entry_search_open = true;
         self.entry_state_filter = filter;
-        SessionChange::None
+        AppEffect::None
     }
 
-    pub fn clear_entry_search(&mut self) -> SessionChange {
+    fn clear_entry_search(&mut self) -> AppEffect {
         self.reset_entry_filters();
-        SessionChange::None
+        AppEffect::None
     }
 
-    pub fn input_changed(&mut self, value: String) -> SessionChange {
-        self.input.set(value);
+    fn input_changed(&mut self, value: String) -> AppEffect {
+        self.input_edited(value);
         let should_scroll = self.ensure_empty_draft_entry();
-        self.refresh_completions();
         if should_scroll {
-            SessionChange::ScrollToSelection
+            AppEffect::ScrollToSelection
         } else {
-            SessionChange::None
+            AppEffect::None
         }
     }
 
-    pub fn submit_input(&mut self) -> SessionChange {
+    fn input_edited(&mut self, value: String) -> AppEffect {
+        self.input.set(value);
+        self.refresh_completions();
+        AppEffect::None
+    }
+
+    fn submit_input(&mut self) -> AppEffect {
         if self.accept_selected_completion() {
-            return SessionChange::FocusInput;
+            return AppEffect::FocusInput;
         }
 
         let source = self.input.source().trim().to_string();
@@ -255,10 +342,10 @@ impl AppSession {
             let id = result.execution.id;
             self.status = self.entry_status(id);
             self.load_edit_entry(id, SelectionStatus::Keep);
-            SessionChange::None
+            AppEffect::None
         } else if let Some(id) = self.draft_entry.take() {
             self.save_new_entry_draft(id, source);
-            SessionChange::ScrollToSelection
+            AppEffect::ScrollToSelection
         } else {
             let execution = self.engine.execute(&source);
             self.refresh_affected(&execution.affected_ids);
@@ -270,46 +357,46 @@ impl AppSession {
             );
             self.editing = None;
             self.input.clear();
-            SessionChange::ScrollToSelection
+            AppEffect::ScrollToSelection
         }
     }
 
-    pub fn start_edit(&mut self, id: ExpressionId) -> SessionChange {
+    fn start_edit(&mut self, id: ExpressionId) -> AppEffect {
         self.close_completions();
         self.load_edit_entry(id, SelectionStatus::Set(format!("Editing {id}")));
-        SessionChange::None
+        AppEffect::None
     }
 
-    pub fn start_new_entry(&mut self) -> SessionChange {
+    fn start_new_entry(&mut self) -> AppEffect {
         self.editing = None;
         self.draft_entry = None;
         self.input.clear();
         self.close_completions();
         if self.ensure_empty_draft_entry() {
-            SessionChange::ScrollToSelection
+            AppEffect::ScrollToSelection
         } else {
-            SessionChange::None
+            AppEffect::None
         }
     }
 
-    pub fn cancel_edit(&mut self) -> SessionChange {
+    fn cancel_edit(&mut self) -> AppEffect {
         self.editing = None;
         self.input.clear();
         self.close_completions();
         self.status = "Edit cancelled".to_string();
-        SessionChange::None
+        AppEffect::None
     }
 
-    pub fn delete_entry(&mut self, id: ExpressionId) -> SessionChange {
+    fn delete_entry(&mut self, id: ExpressionId) -> AppEffect {
         if self.engine.entry_by_id(id).is_none() {
             self.status = unavailable_status(id);
-            return SessionChange::None;
+            return AppEffect::None;
         }
 
         self.perform_delete_entry(id)
     }
 
-    pub fn recalculate_entry(&mut self, id: ExpressionId) -> SessionChange {
+    fn recalculate_entry(&mut self, id: ExpressionId) -> AppEffect {
         if let Some(affected) = self.engine.recompute_entry_by_id(id) {
             self.refresh_affected(&affected);
             self.status = format!("Recalculated {id}");
@@ -317,17 +404,17 @@ impl AppSession {
             self.status = unavailable_status(id);
         }
 
-        SessionChange::None
+        AppEffect::None
     }
 
-    pub fn recalculate_all(&mut self) -> SessionChange {
+    fn recalculate_all(&mut self) -> AppEffect {
         self.engine.recompute_all();
         self.entries = self.engine.entries();
         self.status = "Recalculated all entries".to_string();
-        SessionChange::None
+        AppEffect::None
     }
 
-    pub fn insert_reference(&mut self, id: ExpressionId) -> SessionChange {
+    fn insert_reference(&mut self, id: ExpressionId) -> AppEffect {
         let token = self
             .entries
             .iter()
@@ -339,58 +426,58 @@ impl AppSession {
         self.refresh_completions();
         self.ensure_empty_draft_entry();
         self.status = format!("Inserted {token}");
-        SessionChange::FocusInput
+        AppEffect::FocusInput
     }
 
-    pub fn insert_constant(&mut self, name: String) -> SessionChange {
+    fn insert_constant(&mut self, name: String) -> AppEffect {
         self.input.insert_token(&name);
         self.refresh_completions();
         self.ensure_empty_draft_entry();
         self.status = format!("Inserted {name}");
-        SessionChange::FocusInput
+        AppEffect::FocusInput
     }
 
-    pub fn insert_function(&mut self, name: String) -> SessionChange {
+    fn insert_function(&mut self, name: String) -> AppEffect {
         let token = format!("{name}()");
         self.input.insert_token(&token);
         self.refresh_completions();
         self.ensure_empty_draft_entry();
         self.status = format!("Inserted {token}");
-        SessionChange::FocusInput
+        AppEffect::FocusInput
     }
 
-    pub fn select_entry(&mut self, id: ExpressionId) -> SessionChange {
+    fn select_entry(&mut self, id: ExpressionId) -> AppEffect {
         if self.engine.entry_by_id(id).is_some() {
             self.set_selected_entry(id);
         } else {
             self.status = unavailable_status(id);
         }
 
-        SessionChange::None
+        AppEffect::None
     }
 
-    pub fn set_hovered_entry(&mut self, id: ExpressionId) -> SessionChange {
+    fn set_hovered_entry(&mut self, id: ExpressionId) -> AppEffect {
         self.hovered_entry = Some(id);
-        SessionChange::None
+        AppEffect::None
     }
 
-    pub fn clear_hovered_entry(&mut self, id: ExpressionId) -> SessionChange {
+    fn clear_hovered_entry(&mut self, id: ExpressionId) -> AppEffect {
         if self.hovered_entry == Some(id) {
             self.hovered_entry = None;
         }
 
-        SessionChange::None
+        AppEffect::None
     }
 
-    pub fn select_hovered_entry(&mut self) -> SessionChange {
+    fn select_hovered_entry(&mut self) -> AppEffect {
         if let Some(id) = self.hovered_entry {
             self.select_entry(id)
         } else {
-            SessionChange::None
+            AppEffect::None
         }
     }
 
-    pub fn clear(&mut self) -> SessionChange {
+    fn clear(&mut self) -> AppEffect {
         self.engine.clear();
         self.entries = self.engine.entries();
         self.input.clear();
@@ -401,27 +488,27 @@ impl AppSession {
         self.hovered_entry = None;
         self.reset_entry_filters();
         self.status = "Cleared".to_string();
-        SessionChange::None
+        AppEffect::None
     }
 
-    pub fn undo(&mut self) -> SessionChange {
+    fn undo(&mut self) -> AppEffect {
         if self.engine.undo() {
             self.reset_after_history_restore("Undone");
         } else {
             self.status = "Nothing to undo".to_string();
         }
 
-        SessionChange::None
+        AppEffect::None
     }
 
-    pub fn redo(&mut self) -> SessionChange {
+    fn redo(&mut self) -> AppEffect {
         if self.engine.redo() {
             self.reset_after_history_restore("Redone");
         } else {
             self.status = "Nothing to redo".to_string();
         }
 
-        SessionChange::None
+        AppEffect::None
     }
 
     pub fn selection_navigation_enabled(&self) -> bool {
@@ -429,21 +516,14 @@ impl AppSession {
             || (self.editing.is_some() && self.input.is_loaded_selection())
     }
 
-    pub fn delete_selected_entry(&mut self) -> SessionChange {
-        let Some(id) = self.selected else {
-            return SessionChange::None;
-        };
-        self.delete_entry(id)
-    }
-
-    pub fn move_selection(&mut self, direction: SelectionDirection) -> SessionChange {
+    fn move_selection(&mut self, direction: SelectionDirection) -> AppEffect {
         if !self.selection_navigation_enabled() {
-            return SessionChange::None;
+            return AppEffect::None;
         }
 
         let visible_entries = self.filtered_entries();
         if visible_entries.is_empty() {
-            return SessionChange::None;
+            return AppEffect::None;
         }
 
         let next_index = match self
@@ -461,10 +541,10 @@ impl AppSession {
         };
 
         self.set_selected_entry(visible_entries[next_index].id);
-        SessionChange::None
+        AppEffect::None
     }
 
-    pub fn ensure_empty_draft_entry(&mut self) -> bool {
+    fn ensure_empty_draft_entry(&mut self) -> bool {
         if self.editing.is_some() {
             return false;
         }
@@ -489,7 +569,7 @@ impl AppSession {
         should_scroll
     }
 
-    pub fn filtered_entries(&self) -> Vec<&EntryView> {
+    fn filtered_entries(&self) -> Vec<&EntryView> {
         self.filtered_entries_iter().collect()
     }
 
@@ -526,7 +606,7 @@ impl AppSession {
         selected_compact_text(&self.engine, &self.entries, self.draft_entry, id, entry)
     }
 
-    pub fn reset_after_load(&mut self, status: &str) {
+    fn reset_after_load(&mut self, status: &str) {
         self.entries = self.engine.entries();
         self.input.clear();
         self.close_completions();
@@ -538,7 +618,7 @@ impl AppSession {
         self.status = status.to_string();
     }
 
-    fn perform_delete_entry(&mut self, id: ExpressionId) -> SessionChange {
+    fn perform_delete_entry(&mut self, id: ExpressionId) -> AppEffect {
         if let Some(removal) = self.engine.remove_entry_by_id(id) {
             self.entries
                 .retain(|entry| entry.id != removal.removed_entry.id);
@@ -568,7 +648,7 @@ impl AppSession {
             self.status = unavailable_status(id);
         }
 
-        SessionChange::None
+        AppEffect::None
     }
 
     fn load_edit_entry(&mut self, id: ExpressionId, status: SelectionStatus) -> bool {
@@ -740,7 +820,7 @@ mod tests {
         session.input.set("10".to_string());
         let change = session.submit_input();
 
-        assert_eq!(change, SessionChange::ScrollToSelection);
+        assert_eq!(change, AppEffect::ScrollToSelection);
         assert_eq!(session.entries.len(), 1);
         assert_eq!(session.selected, Some(ExpressionId::new(1)));
         assert_eq!(session.status, "$1 = 10");

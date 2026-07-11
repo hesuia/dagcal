@@ -1,4 +1,4 @@
-use crate::{CompletionItem, CompletionKind, Draft, Engine, ExpressionId, SessionChange};
+use crate::{AppEffect, CompletionItem, CompletionKind, Draft, Engine, ExpressionId};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompletionState {
@@ -200,10 +200,10 @@ pub(crate) fn accept_selected_completion(
     completion: &mut CompletionState,
     input: &mut Draft,
     status: &mut String,
-) -> Option<SessionChange> {
+) -> Option<AppEffect> {
     let insert = completion.accept_selected(input)?;
     *status = format!("Inserted {insert}");
-    Some(SessionChange::FocusInput)
+    Some(AppEffect::FocusInput)
 }
 
 pub fn completion_menu_entries_for_kind(

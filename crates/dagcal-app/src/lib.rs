@@ -11,7 +11,7 @@ mod draft;
 pub mod formatting;
 mod session;
 
-pub use action::{AppAction, AppEffect, EntryStateFilter, SelectionDirection, SessionChange};
+pub use action::{AppAction, AppEffect, EntryStateFilter, SelectionDirection};
 pub use completion::{
     CompletionCandidate, CompletionDirection, CompletionMenuEntry, CompletionState,
     CompletionToken, completion_menu_entries_for_kind,
