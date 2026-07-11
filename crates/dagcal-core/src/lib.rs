@@ -84,7 +84,7 @@ mod parser;
 mod persistence;
 
 pub use engine::{
-    CompletionItem, CompletionKind, CycleDiagnostics, Engine, EntryRemoval, EntryState,
+    CompletionItem, CompletionKind, CycleDiagnostics, Engine, EntryRef, EntryRemoval, EntryState,
     EntryTarget, EntryView, Execution, ExpressionPreview, IntoEntryTarget, PreviewState,
     SetEntryResult,
 };

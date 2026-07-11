@@ -4,6 +4,31 @@ use crate::id::ExpressionId;
 use crate::number::Number;
 use std::collections::BTreeSet;
 
+/// Borrowed, allocation-free view of a stored engine entry.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EntryRef<'a> {
+    /// Stable expression ID.
+    pub id: ExpressionId,
+    /// Optional definition name.
+    pub name: Option<&'a str>,
+    /// Stored expression source.
+    pub source: &'a str,
+    /// Latest evaluation state.
+    pub state: &'a EntryState,
+}
+
+impl EntryRef<'_> {
+    /// Clones this borrowed view into an independently owned value.
+    pub fn into_owned(self) -> EntryView {
+        EntryView {
+            id: self.id,
+            name: self.name.map(str::to_owned),
+            source: self.source.to_owned(),
+            state: self.state.clone(),
+        }
+    }
+}
+
 /// Owned snapshot of one stored engine entry.
 ///
 /// `EntryView` is returned by query methods such as

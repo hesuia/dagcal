@@ -36,6 +36,10 @@ impl CompiledEntry {
         self.error.as_ref()
     }
 
+    pub(super) fn entry_references(&self) -> &BTreeSet<ExpressionId> {
+        &self.analysis.entry_references
+    }
+
     #[cfg(test)]
     pub(super) fn analysis(&self) -> &ExpressionAnalysis {
         &self.analysis

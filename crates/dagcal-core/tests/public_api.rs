@@ -32,6 +32,19 @@ fn assert_eval_error(
 }
 
 #[test]
+fn public_api_iterates_borrowed_entries_without_owned_snapshots() {
+    let mut engine = Engine::new();
+    engine.execute("subtotal = 40");
+    engine.execute("subtotal + 2");
+
+    let entries = engine.iter_entries().collect::<Vec<_>>();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].name, Some("subtotal"));
+    assert_eq!(entries[1].source, "subtotal + 2");
+    assert_eq!(engine.entry_ref(entries[0].id), Some(entries[0]));
+}
+
+#[test]
 fn user_session_supports_definitions_results_edits_and_recovery() {
     let mut engine = Engine::new();
 

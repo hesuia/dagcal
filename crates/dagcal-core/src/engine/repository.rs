@@ -1,5 +1,5 @@
 use crate::id::{ExpressionId, ExpressionIdGenerator};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone)]
 pub(super) struct EntryRecord {
@@ -16,7 +16,7 @@ impl EntryRecord {
 
 #[derive(Debug)]
 pub(super) struct EntryRepository {
-    records: HashMap<ExpressionId, EntryRecord>,
+    records: BTreeMap<ExpressionId, EntryRecord>,
     names: HashMap<String, ExpressionId>,
     id_generator: ExpressionIdGenerator,
 }
@@ -30,7 +30,7 @@ impl Default for EntryRepository {
 impl EntryRepository {
     pub(super) fn new() -> Self {
         Self {
-            records: HashMap::new(),
+            records: BTreeMap::new(),
             names: HashMap::new(),
             id_generator: ExpressionIdGenerator::new(),
         }
@@ -97,10 +97,8 @@ impl EntryRepository {
         self.record(id).and_then(|record| record.name.as_ref())
     }
 
-    pub(super) fn records(&self) -> Vec<&EntryRecord> {
-        let mut records = self.records.values().collect::<Vec<_>>();
-        records.sort_by_key(|record| record.id);
-        records
+    pub(super) fn records(&self) -> impl DoubleEndedIterator<Item = &EntryRecord> {
+        self.records.values()
     }
 
     pub(super) fn ids(&self) -> impl Iterator<Item = ExpressionId> + '_ {
@@ -108,9 +106,7 @@ impl EntryRepository {
     }
 
     pub(super) fn sorted_ids(&self) -> Vec<ExpressionId> {
-        let mut ids = self.ids().collect::<Vec<_>>();
-        ids.sort();
-        ids
+        self.ids().collect()
     }
 
     pub(super) fn len(&self) -> usize {
@@ -118,7 +114,7 @@ impl EntryRepository {
     }
 
     pub(super) fn id_at_index(&self, index: usize) -> Option<ExpressionId> {
-        self.sorted_ids().into_iter().nth(index)
+        self.records.keys().nth(index).copied()
     }
 
     pub(super) fn named_entries(&self) -> Vec<(String, ExpressionId)> {

@@ -124,7 +124,7 @@ mod tests {
         let mut resolve_entry = |id: ExpressionId| {
             refs.get(&id)
                 .cloned()
-                .ok_or_else(|| EvalError::UnknownReference(ReferenceTarget::Id(id)))
+                .ok_or(EvalError::UnknownReference(ReferenceTarget::Id(id)))
         };
         let mut resolve_constant = |name: &str| {
             constants

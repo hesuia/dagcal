@@ -22,6 +22,7 @@ pub(crate) struct GraphAnalysis {
 pub(crate) struct ReferenceGraph {
     graph: DiGraph<ExpressionId, ()>,
     node_indices: HashMap<ExpressionId, NodeIndex>,
+    references: HashMap<ExpressionId, BTreeSet<ExpressionId>>,
 }
 
 impl ReferenceGraph {
@@ -35,6 +36,7 @@ impl ReferenceGraph {
     ) {
         self.graph = DiGraph::new();
         self.node_indices.clear();
+        self.references.clear();
 
         let entries = entries.into_iter().collect::<Vec<_>>();
 
@@ -44,6 +46,7 @@ impl ReferenceGraph {
         }
 
         for (id, references) in entries {
+            self.references.insert(id, references.clone());
             let Some(&dependent) = self.node_indices.get(&id) else {
                 continue;
             };
@@ -54,6 +57,58 @@ impl ReferenceGraph {
                 }
             }
         }
+    }
+
+    /// Inserts or replaces one entry's dependency edges without rebuilding the graph.
+    pub(crate) fn upsert(&mut self, id: ExpressionId, references: BTreeSet<ExpressionId>) {
+        let node = self.ensure_node(id);
+        let incoming = self
+            .graph
+            .edges_directed(node, Direction::Incoming)
+            .map(|edge| edge.id())
+            .collect::<Vec<_>>();
+        for edge in incoming {
+            self.graph.remove_edge(edge);
+        }
+
+        self.references.insert(id, references.clone());
+        for reference in references {
+            if let Some(&dependency) = self.node_indices.get(&reference) {
+                self.graph.add_edge(dependency, node, ());
+            }
+        }
+
+        // A newly materialized ID can satisfy stored `$n` references.
+        for (&dependent_id, dependent_references) in &self.references {
+            if dependent_id != id && dependent_references.contains(&id) {
+                let dependent = self.node_indices[&dependent_id];
+                if self.graph.find_edge(node, dependent).is_none() {
+                    self.graph.add_edge(node, dependent, ());
+                }
+            }
+        }
+    }
+
+    /// Removes an entry node while retaining references to its stable ID.
+    pub(crate) fn remove(&mut self, id: ExpressionId) {
+        let Some(node) = self.node_indices.remove(&id) else {
+            return;
+        };
+        self.references.remove(&id);
+        self.graph.remove_node(node);
+        self.node_indices.clear();
+        for index in self.graph.node_indices() {
+            self.node_indices.insert(self.graph[index], index);
+        }
+    }
+
+    fn ensure_node(&mut self, id: ExpressionId) -> NodeIndex {
+        if let Some(&node) = self.node_indices.get(&id) {
+            return node;
+        }
+        let node = self.graph.add_node(id);
+        self.node_indices.insert(id, node);
+        node
     }
 
     pub(crate) fn affected_by(&self, id: ExpressionId) -> BTreeSet<ExpressionId> {
@@ -185,5 +240,50 @@ impl ReferenceGraph {
         }
 
         dependents
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(value: usize) -> ExpressionId {
+        ExpressionId::new(value)
+    }
+
+    #[test]
+    fn upsert_replaces_only_the_changed_nodes_dependencies() {
+        let mut graph = ReferenceGraph::new();
+        graph.upsert(id(1), BTreeSet::new());
+        graph.upsert(id(2), BTreeSet::from([id(1)]));
+        graph.upsert(id(3), BTreeSet::from([id(2)]));
+
+        graph.upsert(id(2), BTreeSet::new());
+
+        assert_eq!(graph.affected_by(id(1)), BTreeSet::from([id(1)]));
+        assert_eq!(graph.affected_by(id(2)), BTreeSet::from([id(2), id(3)]));
+    }
+
+    #[test]
+    fn adding_a_missing_id_connects_existing_stable_id_references() {
+        let mut graph = ReferenceGraph::new();
+        graph.upsert(id(2), BTreeSet::from([id(1)]));
+        assert_eq!(graph.affected_by(id(1)), BTreeSet::from([id(1)]));
+
+        graph.upsert(id(1), BTreeSet::new());
+
+        assert_eq!(graph.affected_by(id(1)), BTreeSet::from([id(1), id(2)]));
+    }
+
+    #[test]
+    fn removal_keeps_other_node_indices_valid() {
+        let mut graph = ReferenceGraph::new();
+        graph.upsert(id(1), BTreeSet::new());
+        graph.upsert(id(2), BTreeSet::new());
+        graph.upsert(id(3), BTreeSet::from([id(2)]));
+
+        graph.remove(id(1));
+
+        assert_eq!(graph.affected_by(id(2)), BTreeSet::from([id(2), id(3)]));
     }
 }

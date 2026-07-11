@@ -1,6 +1,6 @@
 mod compiled;
-mod dependencies;
 mod entry;
+mod history;
 mod recompute;
 mod repository;
 mod resolver;
@@ -10,7 +10,7 @@ mod symbol;
 mod target;
 
 use self::compiled::{CompiledEntry, CompiledEntryStore};
-use self::dependencies::DependencyIndex;
+use self::history::History;
 use self::recompute::{EvaluationRunner, RecomputePlanner};
 use self::repository::{EntryRecord, EntryRepository};
 use self::resolver::resolve_expr;
@@ -19,6 +19,7 @@ use self::runtime::RuntimeEnvironment;
 use self::symbol::SymbolTable;
 pub use self::target::{EntryTarget, IntoEntryTarget};
 use crate::ast::{ExpressionAnalysis, ParsedExpr, ParsedStatement};
+use crate::dependency_graph::ReferenceGraph;
 use crate::error::{DagcalError, EvalError, PersistenceError};
 use crate::function::FunctionSignature;
 use crate::id::ExpressionId;
@@ -28,7 +29,7 @@ use crate::persistence::{ENGINE_SNAPSHOT_VERSION, EngineSnapshot, PersistedEntry
 use std::collections::{BTreeSet, HashSet};
 
 pub use self::entry::{
-    CompletionItem, CompletionKind, EntryRemoval, EntryState, EntryView, Execution,
+    CompletionItem, CompletionKind, EntryRef, EntryRemoval, EntryState, EntryView, Execution,
     ExpressionPreview, PreviewState, SetEntryResult,
 };
 
@@ -53,7 +54,7 @@ pub struct CycleDiagnostics {
 struct Session {
     entries: EntryRepository,
     compiled: CompiledEntryStore,
-    dependencies: DependencyIndex,
+    dependencies: ReferenceGraph,
     results: ResultCache,
     runtime: RuntimeEnvironment,
 }
@@ -63,7 +64,7 @@ impl Session {
         Self {
             entries: EntryRepository::new(),
             compiled: CompiledEntryStore::new(),
-            dependencies: DependencyIndex::new(),
+            dependencies: ReferenceGraph::new(),
             results: ResultCache::new(),
             runtime: RuntimeEnvironment::new(),
         }
@@ -113,19 +114,22 @@ impl Session {
     }
 
     fn entry_view(&self, id: ExpressionId) -> Option<EntryView> {
+        self.entry_ref(id).map(EntryRef::into_owned)
+    }
+
+    fn entry_ref(&self, id: ExpressionId) -> Option<EntryRef<'_>> {
         let record = self.entries.record(id)?;
-        Some(EntryView {
+        Some(EntryRef {
             id: record.id,
-            name: record.name.clone(),
-            source: record.source.clone(),
-            state: self.results.get(id)?.clone(),
+            name: record.name.as_deref(),
+            source: &record.source,
+            state: self.results.get(id)?,
         })
     }
 
     fn entries(&self) -> Vec<EntryView> {
         self.entries
             .records()
-            .into_iter()
             .filter_map(|record| self.entry_view(record.id))
             .collect()
     }
@@ -225,8 +229,7 @@ fn completion_result_summary(state: &EntryState) -> String {
 /// ```
 pub struct Engine {
     session: Session,
-    undo_stack: Vec<EngineSnapshot>,
-    redo_stack: Vec<EngineSnapshot>,
+    history: History,
 }
 
 impl Default for Engine {
@@ -244,8 +247,7 @@ impl Engine {
     pub fn new() -> Self {
         Self {
             session: Session::new(),
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            history: History::default(),
         }
     }
 
@@ -331,7 +333,7 @@ impl Engine {
 
         self.session.entries = restored_entries;
         self.session.compiled = restored_compiled;
-        self.session.dependencies = DependencyIndex::new();
+        self.session.dependencies = ReferenceGraph::new();
         self.session.results = ResultCache::new();
         self.session.rebuild_dependencies();
         let ids = self.session.entries.ids().collect();
@@ -342,12 +344,12 @@ impl Engine {
 
     /// Returns `true` when an undo operation is currently available.
     pub fn can_undo(&self) -> bool {
-        !self.undo_stack.is_empty()
+        self.history.can_undo()
     }
 
     /// Returns `true` when a redo operation is currently available.
     pub fn can_redo(&self) -> bool {
-        !self.redo_stack.is_empty()
+        self.history.can_redo()
     }
 
     /// Restores the entry state before the most recent successful mutation.
@@ -356,27 +358,23 @@ impl Engine {
     /// dependencies, and recomputed entry states. Runtime constants and
     /// functions are not snapshotted and remain configured on this engine.
     pub fn undo(&mut self) -> bool {
-        let Some(previous) = self.undo_stack.pop() else {
+        let current = self.snapshot();
+        let Some(previous) = self.history.take_undo(current) else {
             return false;
         };
-
-        let current = self.snapshot();
         self.restore_snapshot_untracked(previous)
             .expect("undo history should contain valid snapshots");
-        self.redo_stack.push(current);
         true
     }
 
     /// Reapplies the most recently undone entry mutation.
     pub fn redo(&mut self) -> bool {
-        let Some(next) = self.redo_stack.pop() else {
+        let current = self.snapshot();
+        let Some(next) = self.history.take_redo(current) else {
             return false;
         };
-
-        let current = self.snapshot();
         self.restore_snapshot_untracked(next)
             .expect("redo history should contain valid snapshots");
-        self.undo_stack.push(current);
         true
     }
 
@@ -394,8 +392,7 @@ impl Engine {
 
     /// Clears undo and redo history without changing stored entries.
     pub fn clear_history(&mut self) {
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.history.clear();
     }
 
     /// Executes user input as either a named definition (`name = expr`) or a
@@ -620,7 +617,7 @@ impl Engine {
         self.session.entries.remove(id)?;
         self.session.compiled.remove(id);
         self.session.results.remove(id);
-        self.session.rebuild_dependencies();
+        self.session.dependencies.remove(id);
         self.session.recompute_ids(affected.clone());
         self.record_undo(previous);
         Some(EntryRemoval {
@@ -660,6 +657,23 @@ impl Engine {
     /// Returns a renderable view of an entry by its stable ID.
     pub fn entry_by_id(&self, id: ExpressionId) -> Option<EntryView> {
         self.session.entry_view(id)
+    }
+
+    /// Returns an allocation-free borrowed view for a stable expression ID.
+    pub fn entry_ref(&self, id: ExpressionId) -> Option<EntryRef<'_>> {
+        self.session.entry_ref(id)
+    }
+
+    /// Iterates over stored entries in ascending stable-ID order without cloning them.
+    pub fn iter_entries(&self) -> impl DoubleEndedIterator<Item = EntryRef<'_>> {
+        self.session.entries.records().filter_map(|record| {
+            self.session.state(record.id).map(|state| EntryRef {
+                id: record.id,
+                name: record.name.as_deref(),
+                source: &record.source,
+                state,
+            })
+        })
     }
 
     /// Returns all stored entries sorted by their stable ID.
@@ -873,8 +887,9 @@ impl Engine {
         self.session
             .entries
             .upsert(EntryRecord::new(id, name, source));
+        let references = compiled.entry_references().clone();
         self.session.compiled.insert(id, compiled);
-        self.session.rebuild_dependencies();
+        self.session.dependencies.upsert(id, references);
         let affected_ids = self.session.affected_by(id);
         self.session.recompute_ids(affected_ids.clone());
 
@@ -912,8 +927,7 @@ impl Engine {
             return;
         }
 
-        self.undo_stack.push(previous);
-        self.redo_stack.clear();
+        self.history.record(previous);
     }
 }
 

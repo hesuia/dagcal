@@ -1,8 +1,8 @@
 use super::compiled::CompiledEntryStore;
-use super::dependencies::DependencyIndex;
 use super::entry::EntryState;
 use super::results::ResultCache;
 use super::runtime::RuntimeEnvironment;
+use crate::dependency_graph::ReferenceGraph;
 use crate::error::{DagcalError, EvalError, ReferenceTarget};
 use crate::eval::eval_expr;
 use crate::id::ExpressionId;
@@ -10,11 +10,11 @@ use crate::number::Number;
 use std::collections::BTreeSet;
 
 pub(super) struct RecomputePlanner<'a> {
-    dependencies: &'a DependencyIndex,
+    dependencies: &'a ReferenceGraph,
 }
 
 impl<'a> RecomputePlanner<'a> {
-    pub(super) fn new(dependencies: &'a DependencyIndex) -> Self {
+    pub(super) fn new(dependencies: &'a ReferenceGraph) -> Self {
         Self { dependencies }
     }
 
@@ -26,19 +26,21 @@ impl<'a> RecomputePlanner<'a> {
         &self,
         ids: impl IntoIterator<Item = ExpressionId>,
     ) -> BTreeSet<ExpressionId> {
-        self.dependencies.affected_by_any(ids)
+        ids.into_iter()
+            .flat_map(|id| self.dependencies.affected_by(id))
+            .collect()
     }
 }
 
 pub(super) struct EvaluationRunner<'a> {
-    dependencies: &'a DependencyIndex,
+    dependencies: &'a ReferenceGraph,
     compiled: &'a CompiledEntryStore,
     runtime: &'a RuntimeEnvironment,
 }
 
 impl<'a> EvaluationRunner<'a> {
     pub(super) fn new(
-        dependencies: &'a DependencyIndex,
+        dependencies: &'a ReferenceGraph,
         compiled: &'a CompiledEntryStore,
         runtime: &'a RuntimeEnvironment,
     ) -> Self {
