@@ -28,8 +28,8 @@ impl GuiApp {
     }
 
     pub(super) fn save_as(&mut self) -> Task<Message> {
-        let snapshot = self.session.engine.snapshot();
-        self.session.status = "Saving...".to_string();
+        let snapshot = self.session.snapshot();
+        self.set_status("Saving...");
 
         Task::perform(
             save_snapshot_with_dialog(snapshot, self.current_path.clone()),
@@ -38,8 +38,8 @@ impl GuiApp {
     }
 
     fn save_to_path(&mut self, path: PathBuf) -> Task<Message> {
-        let snapshot = self.session.engine.snapshot();
-        self.session.status = format!("Saving {}...", path_label(&path));
+        let snapshot = self.session.snapshot();
+        self.set_status(format!("Saving {}...", path_label(&path)));
 
         Task::perform(save_snapshot_to_path(path, snapshot), Message::SaveFinished)
     }
@@ -53,13 +53,13 @@ impl GuiApp {
     }
 
     pub(super) fn start_load(&mut self) -> Task<Message> {
-        self.session.status = "Loading...".to_string();
+        self.set_status("Loading...");
 
         Task::perform(load_snapshot(), Message::LoadFinished)
     }
 
     pub(super) fn finish_save(&mut self, result: SaveResult) -> super::effects::UiEffect {
-        self.session.status = match result {
+        let status = match result {
             SaveResult::Cancelled => "Save cancelled".to_string(),
             SaveResult::Saved(path, snapshot) => {
                 let status = format!("Saved {}", path_label(&path));
@@ -69,6 +69,7 @@ impl GuiApp {
             }
             SaveResult::Failed(error) => format!("Save failed: {error}"),
         };
+        self.set_status(status);
 
         super::effects::UiEffect::None
     }
@@ -76,25 +77,26 @@ impl GuiApp {
     pub(super) fn finish_load(&mut self, result: LoadResult) -> super::effects::UiEffect {
         match result {
             LoadResult::Cancelled => {
-                self.session.status = "Load cancelled".to_string();
+                self.set_status("Load cancelled");
             }
             LoadResult::Loaded(path, snapshot) => {
                 let status = format!("Loaded {}", path_label(&path));
                 match AppSession::from_snapshot(snapshot) {
                     Ok(mut session) => {
-                        session.status = status;
+                        session.dispatch(dagcal_app::AppAction::SetStatus(status));
                         self.current_path = Some(path);
                         self.saved_snapshot = session.snapshot();
                         self.session = session;
                     }
                     Err(error) => {
-                        self.session.status =
-                            format!("Load failed: could not restore snapshot ({error})");
+                        self.set_status(format!(
+                            "Load failed: could not restore snapshot ({error})"
+                        ));
                     }
                 }
             }
             LoadResult::Failed(error) => {
-                self.session.status = format!("Load failed: {error}");
+                self.set_status(format!("Load failed: {error}"));
             }
         }
 

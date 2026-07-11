@@ -3,7 +3,7 @@ use super::effects::{
     ENTRY_ROW_ID_PREFIX, UiEffect,
 };
 use super::{Confirmation, GuiApp, Message};
-use dagcal_app::{CompletionDirection, SelectionDirection};
+use dagcal_app::{AppAction, CompletionDirection, SelectionDirection};
 use iced::advanced::widget::{
     Id, Operation, operate,
     operation::{Outcome, Scrollable},
@@ -13,31 +13,31 @@ use iced::{Rectangle, Task, Vector};
 
 impl GuiApp {
     pub(super) fn open_entry_search(&mut self) -> UiEffect {
-        self.session.open_entry_search().into()
+        self.apply(AppAction::OpenEntrySearch)
     }
 
     pub(super) fn close_entry_search(&mut self) -> UiEffect {
-        self.session.close_entry_search().into()
+        self.apply(AppAction::CloseEntrySearch)
     }
 
     pub(super) fn start_edit(&mut self, id: dagcal_app::ExpressionId) -> UiEffect {
-        self.session.start_edit(id).into()
+        self.apply(AppAction::StartEdit(id))
     }
 
     pub(super) fn start_new_entry(&mut self) -> UiEffect {
-        self.session.start_new_entry().into()
+        self.apply(AppAction::StartNewEntry)
     }
 
     pub(super) fn cancel_edit(&mut self) -> UiEffect {
-        self.session.cancel_edit().into()
+        self.apply(AppAction::CancelEdit)
     }
 
     pub(super) fn recalculate_entry(&mut self, id: dagcal_app::ExpressionId) -> UiEffect {
-        self.session.recalculate_entry(id).into()
+        self.apply(AppAction::RecalculateEntry(id))
     }
 
     pub(super) fn recalculate_all(&mut self) -> UiEffect {
-        self.session.recalculate_all().into()
+        self.apply(AppAction::RecalculateAll)
     }
 
     pub(super) fn clear(&mut self) -> Task<Message> {
@@ -49,34 +49,44 @@ impl GuiApp {
     }
 
     pub(super) fn perform_clear(&mut self) -> UiEffect {
-        self.session.clear().into()
+        self.apply(AppAction::Clear)
     }
 
     pub(super) fn undo(&mut self) -> UiEffect {
-        self.session.undo().into()
+        self.apply(AppAction::Undo)
     }
 
     pub(super) fn redo(&mut self) -> UiEffect {
-        self.session.redo().into()
+        self.apply(AppAction::Redo)
+    }
+
+    pub(super) fn apply(&mut self, action: AppAction) -> UiEffect {
+        self.session
+            .dispatch(action)
+            .into_iter()
+            .next()
+            .map(Into::into)
+            .unwrap_or(UiEffect::None)
     }
 
     pub(super) fn scroll_entries_to_selection(&self) -> Task<Message> {
-        let Some(selected) = self.session.selected else {
+        let Some(selected) = self.session.selected_id() else {
             return Task::none();
         };
 
-        let visible_entries = self.session.filtered_entries();
-        let Some(index) = visible_entries
-            .iter()
+        let visible_count = self.session.filtered_entries_iter().count();
+        let Some(index) = self
+            .session
+            .filtered_entries_iter()
             .position(|entry| entry.id == selected)
         else {
             return Task::none();
         };
 
-        let y = if visible_entries.len() <= 1 {
+        let y = if visible_count <= 1 {
             0.0
         } else {
-            index as f32 / (visible_entries.len() - 1) as f32
+            index as f32 / (visible_count - 1) as f32
         };
 
         iced::widget::operation::snap_to(
@@ -89,14 +99,13 @@ impl GuiApp {
         &self,
         direction: SelectionDirection,
     ) -> Task<Message> {
-        let Some(selected) = self.session.selected else {
+        let Some(selected) = self.session.selected_id() else {
             return Task::none();
         };
 
         if !self
             .session
-            .filtered_entries()
-            .iter()
+            .filtered_entries_iter()
             .any(|entry| entry.id == selected)
         {
             return Task::none();

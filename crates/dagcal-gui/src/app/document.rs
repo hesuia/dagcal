@@ -24,8 +24,8 @@ impl GuiApp {
     pub(crate) fn history_status_text(&self) -> String {
         format!(
             "Undo: {}    Redo: {}",
-            availability_label(self.session.engine.can_undo()),
-            availability_label(self.session.engine.can_redo())
+            availability_label(self.session.can_undo()),
+            availability_label(self.session.can_redo())
         )
     }
 

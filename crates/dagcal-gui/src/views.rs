@@ -75,10 +75,10 @@ impl GuiApp {
     fn status_bar_view(&self) -> Element<'_, Message> {
         container(
             row![
-                text(self.session.status.clone())
+                text(self.session.status().to_string())
                     .size(13)
                     .width(Length::FillPortion(3)),
-                text(self.entry_count_status_text())
+                text(self.session.entry_count_status_text())
                     .size(13)
                     .width(Length::FillPortion(1)),
                 text(self.file_status_text())

@@ -1,6 +1,6 @@
 use super::GuiApp;
 use super::effects::UiEffect;
-use dagcal_app::{CompletionDirection, SelectionDirection};
+use dagcal_app::{AppAction, CompletionDirection, SelectionDirection};
 use iced::Task;
 use iced::keyboard::{self, Key, key};
 
@@ -55,23 +55,25 @@ impl GuiApp {
                 key: Key::Named(key::Named::Tab),
                 ..
             } if self.session.completion_is_open() => {
-                self.session.accept_selected_completion();
+                self.apply(AppAction::SubmitInput);
                 return UiEffect::FocusInput;
             }
             keyboard::Event::KeyPressed {
                 key: Key::Named(key::Named::Escape),
                 ..
-            } if self.session.completion_is_open() => self.session.close_completions(),
+            } if self.session.completion_is_open() => {
+                self.apply(AppAction::CloseCompletions);
+            }
             keyboard::Event::KeyPressed {
                 key: Key::Named(key::Named::Escape),
                 ..
-            } if self.session.entry_search_open => {
+            } if self.session.entry_search_is_open() => {
                 self.close_entry_search();
             }
             keyboard::Event::KeyPressed {
                 key: Key::Named(key::Named::Escape),
                 ..
-            } if self.session.editing.is_some() => {
+            } if self.session.editing_id().is_some() => {
                 self.cancel_edit();
             }
             keyboard::Event::KeyPressed { key, modifiers, .. }
@@ -95,7 +97,9 @@ impl GuiApp {
                 key: Key::Named(key::Named::Delete),
                 ..
             } if self.session.selection_navigation_enabled() => {
-                self.session.delete_selected_entry();
+                if let Some(id) = self.session.selected_id() {
+                    self.apply(AppAction::DeleteEntry(id));
+                }
             }
             keyboard::Event::KeyPressed { key, modifiers, .. }
                 if self.session.selection_navigation_enabled()
@@ -130,7 +134,7 @@ impl GuiApp {
                 key: Key::Named(key::Named::F5),
                 ..
             } if self.session.selection_navigation_enabled() => {
-                if let Some(id) = self.session.selected {
+                if let Some(id) = self.session.selected_id() {
                     self.recalculate_entry(id);
                 }
             }
@@ -147,10 +151,10 @@ fn is_character_key(key: &Key, expected: &str) -> bool {
 
 impl GuiApp {
     fn move_entry_selection(&mut self, direction: SelectionDirection) -> UiEffect {
-        let previous = self.session.selected;
-        self.session.move_selection(direction);
+        let previous = self.session.selected_id();
+        self.apply(AppAction::MoveSelection(direction));
 
-        if self.session.selected != previous {
+        if self.session.selected_id() != previous {
             UiEffect::ScrollToSelectionEdge(direction)
         } else {
             UiEffect::None
@@ -159,7 +163,7 @@ impl GuiApp {
 
     fn move_completion_selection(&mut self, direction: CompletionDirection) -> UiEffect {
         let previous = self.session.selected_completion_index();
-        self.session.move_completion_selection(direction);
+        self.apply(AppAction::MoveCompletion(direction));
 
         if self.session.selected_completion_index() != previous {
             UiEffect::ScrollToCompletionSelectionEdge(direction)
@@ -169,7 +173,7 @@ impl GuiApp {
     }
 
     fn edit_selected_entry(&mut self) -> UiEffect {
-        if let Some(id) = self.session.selected {
+        if let Some(id) = self.session.selected_id() {
             return self.start_edit(id);
         }
 

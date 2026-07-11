@@ -27,14 +27,14 @@ impl GuiApp {
 
     pub(super) fn constant_menu_entries(&self) -> Vec<CompletionMenuEntry> {
         completion_menu_entries_for_kind(
-            self.session.engine.completion_items(),
+            self.session.available_completions(),
             CompletionKind::Constant,
         )
     }
 
     pub(super) fn function_menu_entries(&self) -> Vec<CompletionMenuEntry> {
         completion_menu_entries_for_kind(
-            self.session.engine.completion_items(),
+            self.session.available_completions(),
             CompletionKind::Function,
         )
     }
@@ -65,7 +65,7 @@ fn edit_menu() -> Menu<'static, Message, iced::Theme, iced::Renderer> {
 }
 
 fn view_menu(app: &GuiApp) -> Menu<'static, Message, iced::Theme, iced::Renderer> {
-    let (label, message) = entry_search_menu_item(app.entry_search_open);
+    let (label, message) = entry_search_menu_item(app.session.entry_search_is_open());
 
     Menu::new(vec![Item::new(menu_item(label, message))])
         .width(Length::Fixed(150.0))
@@ -195,7 +195,9 @@ mod tests {
     #[test]
     fn menu_entries_collect_runtime_constants() {
         let (mut app, _) = GuiApp::new();
-        app.engine.set_constant("tau", 6);
+        let mut engine = Engine::new();
+        engine.set_constant("tau", 6);
+        app.session = dagcal_app::AppSession::from_engine(engine);
 
         let entries = app.constant_menu_entries();
 
@@ -206,8 +208,9 @@ mod tests {
     #[test]
     fn menu_entries_collect_function_signatures() {
         let (mut app, _) = GuiApp::new();
-        app.engine
-            .register_fixed_function("triple", 1, |args| Ok(args[0].clone() * 3.into()));
+        let mut engine = Engine::new();
+        engine.register_fixed_function("triple", 1, |args| Ok(args[0].clone() * 3.into()));
+        app.session = dagcal_app::AppSession::from_engine(engine);
 
         let entries = app.function_menu_entries();
 

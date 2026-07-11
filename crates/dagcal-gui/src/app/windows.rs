@@ -20,7 +20,7 @@ impl GuiApp {
         self.help_topic = topic;
 
         if self.help_window.is_some() {
-            self.session.status = "Help is already open".to_string();
+            self.set_status("Help is already open");
             return Task::none();
         }
 
@@ -32,7 +32,7 @@ impl GuiApp {
         });
 
         self.help_window = Some(id);
-        self.session.status = "Opened help".to_string();
+        self.set_status("Opened help");
 
         open_window.discard()
     }
@@ -41,7 +41,7 @@ impl GuiApp {
         self.details_target = Some(id);
 
         if self.details_window.is_some() {
-            self.session.status = format!("Showing details for {id}");
+            self.set_status(format!("Showing details for {id}"));
             return Task::none();
         }
 
@@ -53,7 +53,7 @@ impl GuiApp {
         });
 
         self.details_window = Some(window);
-        self.session.status = format!("Opened details for {id}");
+        self.set_status(format!("Opened details for {id}"));
 
         open_window.discard()
     }
@@ -73,7 +73,7 @@ impl GuiApp {
         if self.confirmation_window == Some(id) {
             self.confirmation_window = None;
             self.pending_confirmation = None;
-            self.session.status = "Action cancelled".to_string();
+            self.set_status("Action cancelled");
             return window::close(id);
         }
 
@@ -112,7 +112,7 @@ impl GuiApp {
 
     pub(super) fn cancel_confirmation(&mut self) -> Task<Message> {
         self.pending_confirmation = None;
-        self.session.status = "Action cancelled".to_string();
+        self.set_status("Action cancelled");
         self.close_confirmation_window()
     }
 
@@ -126,11 +126,12 @@ impl GuiApp {
 
     pub(super) fn request_confirmation(&mut self, confirmation: Confirmation) -> Task<Message> {
         self.pending_confirmation = Some(confirmation);
-        self.session.status = match confirmation {
+        let status = match confirmation {
             Confirmation::Clear => "Confirm clear".to_string(),
             Confirmation::Load => "Confirm load".to_string(),
             Confirmation::Quit | Confirmation::CloseMain(_) => "Confirm quit".to_string(),
         };
+        self.set_status(status);
 
         if self.confirmation_window.is_some() {
             return Task::none();

@@ -5,18 +5,21 @@ use iced::{Element, Fill, Length, window};
 
 impl GuiApp {
     pub(super) fn selected_detail_view(&self) -> Element<'_, Message> {
-        let Some(id) = self.session.selected else {
+        let Some(id) = self.session.selected_id() else {
             return fixed_line(text("Details: select an entry").size(14), DETAIL_HEIGHT);
         };
 
-        let Some(entry) = self.session.entries.iter().find(|entry| entry.id == id) else {
+        let Some(entry) = self.session.entry(id) else {
             return fixed_line(
                 text("Details: selected entry is not available").size(14),
                 DETAIL_HEIGHT,
             );
         };
 
-        fixed_scroll_text(&self.selected_compact_text(id, entry), DETAIL_HEIGHT)
+        fixed_scroll_text(
+            &self.session.selected_compact_text(id, entry),
+            DETAIL_HEIGHT,
+        )
     }
 
     pub(super) fn details_window_view(&self, window: window::Id) -> Element<'_, Message> {
@@ -46,14 +49,14 @@ impl GuiApp {
             return "No entry selected.".to_string();
         };
 
-        let Some(entry) = self.session.entries.iter().find(|entry| entry.id == id) else {
+        let Some(entry) = self.session.entry(id) else {
             return format!("{id} is not available.");
         };
 
         format!(
             "{}\n\n{}",
-            self.selected_summary_text(id, entry),
-            self.selected_error_text(entry)
+            self.session.selected_summary_text(id, entry),
+            self.session.selected_error_text(entry)
         )
     }
 }
@@ -68,9 +71,9 @@ mod tests {
         let (mut app, _) = GuiApp::new();
         let _ = app.update(Message::InputChanged("1 / 0".to_string()));
         let _ = app.update(Message::Submit);
-        let entry = app.entries[0].clone();
+        let entry = app.session.entries()[0].clone();
 
-        let detail = app.selected_error_text(&entry);
+        let detail = app.session.selected_error_text(&entry);
 
         assert!(detail.contains("Error detail:"));
         assert!(detail.len() > "Error".len());
@@ -81,9 +84,11 @@ mod tests {
         let (mut app, _) = GuiApp::new();
         let _ = app.update(Message::InputChanged("1 / 0".to_string()));
         let _ = app.update(Message::Submit);
-        let entry = app.entries[0].clone();
+        let entry = app.session.entries()[0].clone();
 
-        let detail = app.selected_summary_text(ExpressionId::new(1), &entry);
+        let detail = app
+            .session
+            .selected_summary_text(ExpressionId::new(1), &entry);
 
         assert!(detail.contains("Result: Error"));
     }
@@ -93,9 +98,11 @@ mod tests {
         let (mut app, _) = GuiApp::new();
         let _ = app.update(Message::InputChanged("1 / 0".to_string()));
         let _ = app.update(Message::Submit);
-        let entry = app.entries[0].clone();
+        let entry = app.session.entries()[0].clone();
 
-        let detail = app.selected_compact_text(ExpressionId::new(1), &entry);
+        let detail = app
+            .session
+            .selected_compact_text(ExpressionId::new(1), &entry);
 
         assert!(detail.contains("Result: Error"));
         assert!(!detail.contains("Error detail:"));

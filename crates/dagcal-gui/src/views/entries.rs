@@ -17,16 +17,16 @@ use iced_aw::ContextMenu;
 
 impl GuiApp {
     pub(super) fn entries_view(&self) -> Element<'_, Message> {
-        let filtered_entries = self.session.filtered_entries();
+        let filtered_entries: Vec<_> = self.session.filtered_entries_iter().collect();
         let mut entries = column![].spacing(6);
-        if self.session.entry_search_open {
+        if self.session.entry_search_is_open() {
             entries = entries.push(entry_filters(self));
         }
         entries = entries.push(entry_header());
 
         let mut list = column![].spacing(6);
 
-        if self.session.entries.is_empty() {
+        if self.session.entries().is_empty() {
             list = list.push(
                 container(text("No entries yet").size(16))
                     .padding(12)
@@ -42,9 +42,9 @@ impl GuiApp {
             for entry in filtered_entries {
                 list = list.push(entry_row(
                     entry,
-                    &self.session.entries,
-                    self.session.selected == Some(entry.id),
-                    self.session.draft_entry == Some(entry.id),
+                    self.session.entries(),
+                    self.session.selected_id() == Some(entry.id),
+                    self.session.draft_entry_id() == Some(entry.id),
                 ));
             }
         }
@@ -64,23 +64,27 @@ fn entry_filters(app: &GuiApp) -> Element<'_, Message> {
     let mut filters = row![
         text_input(
             "Search ID, name, expression, result...",
-            &app.session.entry_search_query
+            app.session.entry_search_query()
         )
         .id(ENTRY_SEARCH_INPUT_ID)
         .on_input(Message::EntrySearchChanged)
         .padding(8)
         .size(15)
         .width(Length::FillPortion(3)),
-        filter_button("All", EntryStateFilter::All, app.session.entry_state_filter),
+        filter_button(
+            "All",
+            EntryStateFilter::All,
+            app.session.entry_state_filter()
+        ),
         filter_button(
             "Values",
             EntryStateFilter::Values,
-            app.session.entry_state_filter
+            app.session.entry_state_filter()
         ),
         filter_button(
             "Errors",
             EntryStateFilter::Errors,
-            app.session.entry_state_filter
+            app.session.entry_state_filter()
         ),
     ]
     .spacing(8)
@@ -224,13 +228,17 @@ mod tests {
     fn draft_entry_result_text_does_not_show_error() {
         let (mut app, _) = GuiApp::new();
         let _ = app.update(Message::InputChanged("1 + 2".to_string()));
-        let entry = app.entries[0].clone();
+        let entry = app.session.entries()[0].clone();
 
         assert_eq!(table_result_summary(&entry.state, true), "None");
         assert!(
-            app.selected_summary_text(entry.id, &entry)
+            app.session
+                .selected_summary_text(entry.id, &entry)
                 .contains("Result: None")
         );
-        assert_eq!(app.selected_error_text(&entry), "Error detail: none");
+        assert_eq!(
+            app.session.selected_error_text(&entry),
+            "Error detail: none"
+        );
     }
 }

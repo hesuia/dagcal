@@ -36,13 +36,13 @@ impl UiEffect {
     }
 }
 
-impl From<dagcal_app::SessionChange> for UiEffect {
-    fn from(change: dagcal_app::SessionChange) -> Self {
+impl From<dagcal_app::AppEffect> for UiEffect {
+    fn from(change: dagcal_app::AppEffect) -> Self {
         match change {
-            dagcal_app::SessionChange::None => Self::None,
-            dagcal_app::SessionChange::FocusInput => Self::FocusInput,
-            dagcal_app::SessionChange::FocusEntrySearch => Self::FocusEntrySearch,
-            dagcal_app::SessionChange::ScrollToSelection => Self::ScrollToSelection,
+            dagcal_app::AppEffect::None => Self::None,
+            dagcal_app::AppEffect::FocusInput => Self::FocusInput,
+            dagcal_app::AppEffect::FocusEntrySearch => Self::FocusEntrySearch,
+            dagcal_app::AppEffect::ScrollToSelection => Self::ScrollToSelection,
         }
     }
 }

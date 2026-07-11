@@ -20,7 +20,6 @@ use dagcal_app::{
     AppAction, AppSession, CompletionDirection, EngineSnapshot, ExpressionId, SelectionDirection,
 };
 use iced::{Size, Subscription, Task, keyboard as iced_keyboard, window};
-use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -180,18 +179,8 @@ impl GuiApp {
         let effects = self.session.dispatch(action);
         effects::app_effects_into_task(self, effects)
     }
-}
 
-impl Deref for GuiApp {
-    type Target = AppSession;
-
-    fn deref(&self) -> &Self::Target {
-        &self.session
-    }
-}
-
-impl DerefMut for GuiApp {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.session
+    pub(super) fn set_status(&mut self, status: impl Into<String>) {
+        self.session.dispatch(AppAction::SetStatus(status.into()));
     }
 }

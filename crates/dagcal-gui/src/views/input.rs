@@ -12,12 +12,12 @@ use iced_aw::{DropDown, drop_down};
 
 impl GuiApp {
     pub(super) fn input_view(&self) -> Element<'_, Message> {
-        let source = self.session.input.source();
-        let label = match self.session.editing {
+        let source = self.session.input_source();
+        let label = match self.session.editing_id() {
             Some(id) => format!("Edit {id}"),
             None => "New expression".to_string(),
         };
-        let resolved = resolved_source(source, &self.session.entries);
+        let resolved = resolved_source(source, self.session.entries());
         let preview = self.preview_summary(source);
 
         let input = text_input("1 + 2, subtotal = 100, or $1 * 3", source)
@@ -43,7 +43,7 @@ impl GuiApp {
         .spacing(8)
         .align_y(iced::Center);
 
-        if self.session.editing.is_some() {
+        if self.session.editing_id().is_some() {
             actions = actions.push(button("Cancel").on_press(Message::CancelEdit));
         }
 
@@ -64,7 +64,7 @@ impl GuiApp {
             return "Preview: empty".to_string();
         }
 
-        match self.session.engine.eval_statement_once(source) {
+        match self.session.preview(source) {
             Ok(value) => format!("Preview: {value}"),
             Err(err) => format!("Preview error: {err}"),
         }
