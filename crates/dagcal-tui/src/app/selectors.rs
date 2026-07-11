@@ -4,7 +4,7 @@ use dagcal_app::{CompletionCandidate, EntryStateFilter, EntryView, formatting};
 
 impl App {
     pub fn entries(&self) -> Vec<EntryView> {
-        self.session.entries.clone()
+        self.session.entries().to_vec()
     }
 
     pub fn visible_entries(&self) -> Vec<EntryView> {
@@ -16,7 +16,7 @@ impl App {
     }
 
     pub fn selected_visible_index(&self) -> Option<usize> {
-        let selected = self.session.selected?;
+        let selected = self.session.selected_id()?;
         self.session
             .filtered_entries_iter()
             .position(|entry| entry.id == selected)
@@ -27,19 +27,19 @@ impl App {
     }
 
     pub fn input(&self) -> &str {
-        self.session.input.source()
+        self.session.input_source()
     }
 
     pub fn search_query(&self) -> &str {
-        &self.session.entry_search_query
+        self.session.entry_search_query()
     }
 
     pub fn search_is_open(&self) -> bool {
-        self.session.entry_search_open
+        self.session.entry_search_is_open()
     }
 
     pub fn entry_state_filter(&self) -> EntryStateFilter {
-        self.session.entry_state_filter
+        self.session.entry_state_filter()
     }
 
     pub fn entry_count_status_text(&self) -> String {
@@ -49,13 +49,13 @@ impl App {
     pub fn history_status_text(&self) -> String {
         format!(
             "Undo: {}    Redo: {}",
-            availability_label(self.session.engine.can_undo()),
-            availability_label(self.session.engine.can_redo())
+            availability_label(self.session.can_undo()),
+            availability_label(self.session.can_redo())
         )
     }
 
     pub fn status(&self) -> &str {
-        &self.session.status
+        self.session.status()
     }
 
     pub fn should_quit(&self) -> bool {
@@ -75,7 +75,7 @@ impl App {
     }
 
     pub fn resolved_input(&self) -> String {
-        formatting::resolved_source(self.input(), &self.session.entries)
+        formatting::resolved_source(self.input(), self.session.entries())
     }
 
     pub fn preview_summary(&self) -> String {
@@ -84,18 +84,18 @@ impl App {
             return "Preview: empty".to_string();
         }
 
-        match self.session.engine.eval_statement_once(source) {
+        match self.session.preview(source) {
             Ok(value) => format!("Preview: {value}"),
             Err(err) => format!("Preview error: {err}"),
         }
     }
 
     pub fn selected_detail_text(&self) -> String {
-        let Some(id) = self.session.selected else {
+        let Some(id) = self.session.selected_id() else {
             return "Details: select an entry".to_string();
         };
 
-        let Some(entry) = self.session.entries.iter().find(|entry| entry.id == id) else {
+        let Some(entry) = self.session.entry(id) else {
             return "Details: selected entry is not available".to_string();
         };
 

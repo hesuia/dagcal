@@ -1,5 +1,11 @@
 use super::*;
-use dagcal_app::{EntryState, EntryStateFilter, ExpressionId, Number};
+use dagcal_app::{AppAction, EntryState, EntryStateFilter, ExpressionId, Number};
+
+fn add_entry(app: &mut App, source: &str) {
+    app.session
+        .dispatch(AppAction::InputEdited(source.to_string()));
+    app.session.dispatch(AppAction::SubmitInput);
+}
 
 #[test]
 fn insert_adds_entries_and_selects_the_latest_result() {
@@ -29,14 +35,14 @@ fn insert_adds_entries_and_selects_the_latest_result() {
 #[test]
 fn edit_updates_selected_source_and_recomputes_dependents() {
     let mut app = App::new();
-    app.session.engine.execute("subtotal = 100");
-    app.session.engine.execute("subtotal * 2");
-    app.session.entries = app.session.engine.entries();
-    app.session.selected = Some(ExpressionId::new(1));
+    add_entry(&mut app, "subtotal = 100");
+    add_entry(&mut app, "subtotal * 2");
+    app.session
+        .dispatch(AppAction::SelectEntry(ExpressionId::new(1)));
 
     app.start_edit();
     assert_eq!(app.input(), "subtotal = 100");
-    app.session.input.clear();
+    app.session.dispatch(AppAction::InputChanged(String::new()));
     for ch in "subtotal = 120".chars() {
         app.push_input(ch);
     }
@@ -50,12 +56,10 @@ fn edit_updates_selected_source_and_recomputes_dependents() {
 #[test]
 fn edit_keeps_invalid_source_as_error_entry() {
     let mut app = App::new();
-    app.session.engine.execute("10");
-    app.session.entries = app.session.engine.entries();
-    app.session.selected = Some(ExpressionId::new(1));
+    add_entry(&mut app, "10");
 
     app.start_edit();
-    app.session.input.clear();
+    app.session.dispatch(AppAction::InputChanged(String::new()));
     for ch in "1 +".chars() {
         app.push_input(ch);
     }
@@ -88,10 +92,10 @@ fn insert_keeps_invalid_source_as_error_entry() {
 #[test]
 fn delete_preserves_later_ids() {
     let mut app = App::new();
-    app.session.engine.execute("10");
-    app.session.engine.execute("20");
-    app.session.entries = app.session.engine.entries();
-    app.session.selected = Some(ExpressionId::new(1));
+    add_entry(&mut app, "10");
+    add_entry(&mut app, "20");
+    app.session
+        .dispatch(AppAction::SelectEntry(ExpressionId::new(1)));
     app.delete_selected();
 
     let entries = app.entries();
@@ -138,10 +142,8 @@ fn empty_list_actions_do_not_panic() {
 #[test]
 fn search_filters_visible_entries_and_selection() {
     let mut app = App::new();
-    app.session.input.set("subtotal = 10".to_string());
-    app.session.submit_input();
-    app.session.input.set("subtotal / 0".to_string());
-    app.session.submit_input();
+    add_entry(&mut app, "subtotal = 10");
+    add_entry(&mut app, "subtotal / 0");
 
     app.open_search();
     for ch in "subtotal".chars() {
@@ -159,8 +161,7 @@ fn search_filters_visible_entries_and_selection() {
 #[test]
 fn completion_opens_moves_and_accepts_named_entry() {
     let mut app = App::new();
-    app.session.input.set("subtotal = 10".to_string());
-    app.session.submit_input();
+    add_entry(&mut app, "subtotal = 10");
 
     app.start_insert();
     for ch in "sub".chars() {
@@ -183,8 +184,7 @@ fn completion_opens_moves_and_accepts_named_entry() {
 #[test]
 fn submit_accepts_completion_before_saving_entry() {
     let mut app = App::new();
-    app.session.input.set("subtotal = 10".to_string());
-    app.session.submit_input();
+    add_entry(&mut app, "subtotal = 10");
 
     app.start_insert();
     for ch in "sub".chars() {
@@ -200,9 +200,7 @@ fn submit_accepts_completion_before_saving_entry() {
 #[test]
 fn selected_reference_insertion_enters_insert_mode() {
     let mut app = App::new();
-    app.session.input.set("subtotal = 10".to_string());
-    app.session.submit_input();
-    app.session.selected = Some(ExpressionId::new(1));
+    add_entry(&mut app, "subtotal = 10");
 
     app.insert_selected_reference();
 
@@ -214,9 +212,7 @@ fn selected_reference_insertion_enters_insert_mode() {
 #[test]
 fn recalculate_selected_and_all_update_status() {
     let mut app = App::new();
-    app.session.input.set("10".to_string());
-    app.session.submit_input();
-    app.session.selected = Some(ExpressionId::new(1));
+    add_entry(&mut app, "10");
 
     app.recalculate_selected();
     assert_eq!(app.status(), "Recalculated $1");

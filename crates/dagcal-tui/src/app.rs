@@ -32,8 +32,9 @@ impl Default for App {
 impl App {
     pub fn new() -> Self {
         let mut session = AppSession::new();
-        session.status =
-            "i: insert  e: edit  /: search  p: use  R: recalc  A: recalc all  q: quit".to_string();
+        session.dispatch(dagcal_app::AppAction::SetStatus(
+            "i: insert  e: edit  /: search  p: use  R: recalc  A: recalc all  q: quit".to_string(),
+        ));
         Self {
             session,
             mode: Mode::Normal,
