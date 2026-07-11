@@ -4,31 +4,11 @@ use crate::formatting::{
     selected_summary_text, state_summary, status_state_summary,
 };
 use crate::{
-    CompletionCandidate, CompletionDirection, CompletionState, Draft, Engine, EngineSnapshot,
-    EntryState, EntryView, ExpressionId,
+    AppAction, AppEffect, CompletionCandidate, CompletionDirection, CompletionState, Draft, Engine,
+    EngineSnapshot, EntryState, EntryStateFilter, EntryView, ExpressionId, SelectionDirection,
+    SessionChange,
 };
 use std::collections::BTreeSet;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionChange {
-    None,
-    FocusInput,
-    FocusEntrySearch,
-    ScrollToSelection,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EntryStateFilter {
-    All,
-    Values,
-    Errors,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectionDirection {
-    Previous,
-    Next,
-}
 
 pub struct AppSession {
     pub engine: Engine,
@@ -69,6 +49,56 @@ impl AppSession {
         }
     }
 
+    /// Applies one frontend-independent action and returns requested UI effects.
+    pub fn dispatch(&mut self, action: AppAction) -> Vec<AppEffect> {
+        let effect = match action {
+            AppAction::InputChanged(value) => self.input_changed(value),
+            AppAction::OpenEntrySearch => self.open_entry_search(),
+            AppAction::CloseEntrySearch => self.close_entry_search(),
+            AppAction::EntrySearchChanged(value) => self.entry_search_changed(value),
+            AppAction::EntryStateFilterChanged(filter) => self.entry_state_filter_changed(filter),
+            AppAction::ClearEntrySearch => self.clear_entry_search(),
+            AppAction::SubmitInput => self.submit_input(),
+            AppAction::StartEdit(id) => self.start_edit(id),
+            AppAction::StartNewEntry => self.start_new_entry(),
+            AppAction::CancelEdit => self.cancel_edit(),
+            AppAction::DeleteEntry(id) => self.delete_entry(id),
+            AppAction::RecalculateEntry(id) => self.recalculate_entry(id),
+            AppAction::RecalculateAll => self.recalculate_all(),
+            AppAction::InsertReference(id) => self.insert_reference(id),
+            AppAction::InsertConstant(name) => self.insert_constant(name),
+            AppAction::InsertFunction(name) => self.insert_function(name),
+            AppAction::SelectEntry(id) => self.select_entry(id),
+            AppAction::SetHoveredEntry(id) => self.set_hovered_entry(id),
+            AppAction::ClearHoveredEntry(id) => self.clear_hovered_entry(id),
+            AppAction::SelectHoveredEntry => self.select_hovered_entry(),
+            AppAction::Clear => self.clear(),
+            AppAction::Undo => self.undo(),
+            AppAction::Redo => self.redo(),
+            AppAction::MoveSelection(direction) => self.move_selection(direction),
+            AppAction::MoveCompletion(direction) => {
+                self.move_completion_selection(direction);
+                AppEffect::None
+            }
+            AppAction::AcceptCompletion(index) => {
+                return self
+                    .accept_completion(index)
+                    .then_some(AppEffect::FocusInput)
+                    .into_iter()
+                    .collect();
+            }
+            AppAction::CloseCompletions => {
+                self.close_completions();
+                AppEffect::None
+            }
+        };
+
+        (!matches!(effect, AppEffect::None))
+            .then_some(effect)
+            .into_iter()
+            .collect()
+    }
+
     pub fn from_engine(engine: Engine) -> Self {
         let mut session = Self::new();
         session.engine = engine;
@@ -82,6 +112,31 @@ impl AppSession {
 
     pub fn snapshot(&self) -> EngineSnapshot {
         self.engine.snapshot()
+    }
+
+    /// Returns the calculation engine used by this session.
+    pub fn engine(&self) -> &Engine {
+        &self.engine
+    }
+
+    /// Returns cached entries in stable-ID order.
+    pub fn entries(&self) -> &[EntryView] {
+        &self.entries
+    }
+
+    /// Returns the currently selected stable ID.
+    pub fn selected_id(&self) -> Option<ExpressionId> {
+        self.selected
+    }
+
+    /// Returns the current editor source.
+    pub fn input_source(&self) -> &str {
+        self.input.source()
+    }
+
+    /// Returns the latest user-facing status.
+    pub fn status(&self) -> &str {
+        &self.status
     }
 
     pub fn restore_snapshot(
@@ -435,10 +490,14 @@ impl AppSession {
     }
 
     pub fn filtered_entries(&self) -> Vec<&EntryView> {
+        self.filtered_entries_iter().collect()
+    }
+
+    /// Iterates over entries accepted by the active search and state filters.
+    pub fn filtered_entries_iter(&self) -> impl DoubleEndedIterator<Item = &EntryView> {
         self.entries
             .iter()
             .filter(|entry| self.entry_matches_filters(entry))
-            .collect()
     }
 
     pub fn filters_are_active(&self) -> bool {
@@ -447,7 +506,7 @@ impl AppSession {
     }
 
     pub fn entry_count_status_text(&self) -> String {
-        let visible_count = self.filtered_entries().len();
+        let visible_count = self.filtered_entries_iter().count();
         if self.filters_are_active() {
             format!("Entries: {visible_count} / {}", self.entries.len())
         } else {
