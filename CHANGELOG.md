@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-11
+
 ### Added
 - Core: Added allocation-free borrowed entry views and stable-ID ordered entry iterators.
 - App: Added typed `AppAction` and `AppEffect` APIs for frontend-independent state transitions.
