@@ -14,6 +14,7 @@ The format is based on Keep a Changelog.
 - GUI: Added double-click editing for entry rows.
 
 ### Changed
+- GUI/TUI: Show `Error` instead of full diagnostics in expression completion suggestions; keep details in the selected entry details view.
 - App/GUI/TUI: Encapsulated shared session state behind actions and borrowed selectors, removed the legacy `SessionChange` alias and GUI `Deref` access, and migrated both frontends to the reducer boundary.
 - App: Added explicit actions for frontend status messages, non-materializing editor updates, input resets, selection clearing, and empty-draft cleanup.
 - GUI: Separated Iced task/effect handling from shared state mutation and moved GUI tests to the same public app contract used by production code.

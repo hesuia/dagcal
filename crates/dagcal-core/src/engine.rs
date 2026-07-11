@@ -179,7 +179,7 @@ impl Session {
 fn completion_result_summary(state: &EntryState) -> String {
     match state {
         EntryState::Value(value) => value.to_string(),
-        EntryState::Error(err) => format!("error: {err}"),
+        EntryState::Error(_) => "Error".to_string(),
     }
 }
 

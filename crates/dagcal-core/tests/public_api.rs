@@ -691,6 +691,20 @@ fn public_api_exposes_completion_items_for_frontends() {
 }
 
 #[test]
+fn completion_items_use_compact_error_results() {
+    let mut engine = Engine::new();
+    let failed = engine.execute("1 / 0").id;
+
+    let item = engine
+        .completion_items()
+        .into_iter()
+        .find(|item| item.kind == CompletionKind::Result && item.label == failed.to_string())
+        .expect("failed entry should have a result completion item");
+
+    assert_eq!(item.result.as_deref(), Some("Error"));
+}
+
+#[test]
 fn public_api_keeps_numbered_results_stable_across_removal_and_append() {
     let mut engine = Engine::new();
 
