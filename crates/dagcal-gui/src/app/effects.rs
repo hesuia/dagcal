@@ -47,6 +47,17 @@ impl From<dagcal_app::SessionChange> for UiEffect {
     }
 }
 
+pub(super) fn app_effects_into_task(
+    app: &GuiApp,
+    effects: Vec<dagcal_app::AppEffect>,
+) -> Task<Message> {
+    Task::batch(
+        effects
+            .into_iter()
+            .map(|effect| UiEffect::from(effect).into_task(app)),
+    )
+}
+
 pub(super) fn subscription(_app: &GuiApp) -> Subscription<Message> {
     let right_clicks = event::listen_with(|event, _status, window| match event {
         iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {

@@ -8,11 +8,7 @@ impl App {
     }
 
     pub fn visible_entries(&self) -> Vec<EntryView> {
-        self.session
-            .filtered_entries()
-            .into_iter()
-            .cloned()
-            .collect()
+        self.session.filtered_entries_iter().cloned().collect()
     }
 
     pub fn selected(&self) -> usize {
@@ -22,8 +18,7 @@ impl App {
     pub fn selected_visible_index(&self) -> Option<usize> {
         let selected = self.session.selected?;
         self.session
-            .filtered_entries()
-            .iter()
+            .filtered_entries_iter()
             .position(|entry| entry.id == selected)
     }
 

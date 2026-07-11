@@ -17,7 +17,7 @@ pub use file_io::{LoadResult, SaveResult};
 pub(crate) use windows::{Confirmation, HelpTopic};
 
 use dagcal_app::{
-    AppSession, CompletionDirection, EngineSnapshot, ExpressionId, SelectionDirection,
+    AppAction, AppSession, CompletionDirection, EngineSnapshot, ExpressionId, SelectionDirection,
 };
 use iced::{Size, Subscription, Task, keyboard as iced_keyboard, window};
 use std::ops::{Deref, DerefMut};
@@ -109,24 +109,30 @@ impl GuiApp {
 
     pub(crate) fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::InputChanged(value) => self.input_changed(value),
-            Message::OpenEntrySearch => self.open_entry_search(),
-            Message::EntrySearchChanged(value) => self.entry_search_changed(value),
-            Message::EntryStateFilterChanged(filter) => self.entry_state_filter_changed(filter),
-            Message::ClearEntrySearch => self.clear_entry_search(),
-            Message::Submit => self.submit_input(),
-            Message::NewEntry => self.start_new_entry(),
-            Message::Edit(id) => self.start_edit(id),
-            Message::CancelEdit => self.cancel_edit(),
-            Message::Delete(id) => self.delete_entry(id),
-            Message::Recalculate(id) => self.recalculate_entry(id),
-            Message::RecalculateAll => self.recalculate_all(),
-            Message::InsertReference(id) => self.insert_reference(id),
-            Message::Select(id) => self.select_entry(id),
-            Message::EntryHovered(id) => self.set_hovered_entry(id),
-            Message::EntryUnhovered(id) => self.clear_hovered_entry(id),
+            Message::InputChanged(value) => return self.dispatch(AppAction::InputChanged(value)),
+            Message::OpenEntrySearch => return self.dispatch(AppAction::OpenEntrySearch),
+            Message::EntrySearchChanged(value) => {
+                return self.dispatch(AppAction::EntrySearchChanged(value));
+            }
+            Message::EntryStateFilterChanged(filter) => {
+                return self.dispatch(AppAction::EntryStateFilterChanged(filter));
+            }
+            Message::ClearEntrySearch => return self.dispatch(AppAction::ClearEntrySearch),
+            Message::Submit => return self.dispatch(AppAction::SubmitInput),
+            Message::NewEntry => return self.dispatch(AppAction::StartNewEntry),
+            Message::Edit(id) => return self.dispatch(AppAction::StartEdit(id)),
+            Message::CancelEdit => return self.dispatch(AppAction::CancelEdit),
+            Message::Delete(id) => return self.dispatch(AppAction::DeleteEntry(id)),
+            Message::Recalculate(id) => return self.dispatch(AppAction::RecalculateEntry(id)),
+            Message::RecalculateAll => return self.dispatch(AppAction::RecalculateAll),
+            Message::InsertReference(id) => return self.dispatch(AppAction::InsertReference(id)),
+            Message::Select(id) => return self.dispatch(AppAction::SelectEntry(id)),
+            Message::EntryHovered(id) => return self.dispatch(AppAction::SetHoveredEntry(id)),
+            Message::EntryUnhovered(id) => {
+                return self.dispatch(AppAction::ClearHoveredEntry(id));
+            }
             Message::RightClick(window) if self.main_window == Some(window) => {
-                self.select_hovered_entry()
+                return self.dispatch(AppAction::SelectHoveredEntry);
             }
             Message::RightClick(_) => effects::UiEffect::None,
             Message::Keyboard(window, event) if self.main_window == Some(window) => {
@@ -147,16 +153,12 @@ impl GuiApp {
             Message::LoadFinished(result) => self.finish_load(result),
             Message::Undo => self.undo(),
             Message::Redo => self.redo(),
-            Message::InsertConstant(name) => self.insert_constant(name),
-            Message::InsertFunction(name) => self.insert_function(name),
+            Message::InsertConstant(name) => return self.dispatch(AppAction::InsertConstant(name)),
+            Message::InsertFunction(name) => return self.dispatch(AppAction::InsertFunction(name)),
             Message::AcceptCompletion(index) => {
-                self.session.accept_completion(index);
-                effects::UiEffect::FocusInput
+                return self.dispatch(AppAction::AcceptCompletion(index));
             }
-            Message::DismissCompletion => {
-                self.session.close_completions();
-                effects::UiEffect::None
-            }
+            Message::DismissCompletion => return self.dispatch(AppAction::CloseCompletions),
             Message::ShowDetails(id) => return self.open_details_window(id),
             Message::Quit => return self.quit(),
             Message::ShowAbout => return self.open_help_window(HelpTopic::About),
@@ -172,6 +174,11 @@ impl GuiApp {
 
     pub(crate) fn subscription(&self) -> Subscription<Message> {
         effects::subscription(self)
+    }
+
+    fn dispatch(&mut self, action: AppAction) -> Task<Message> {
+        let effects = self.session.dispatch(action);
+        effects::app_effects_into_task(self, effects)
     }
 }
 

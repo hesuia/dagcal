@@ -1,6 +1,6 @@
 use super::{App, Mode};
 use dagcal_app::{
-    CompletionDirection, EntryStateFilter, EntryView, ExpressionId, SelectionDirection,
+    AppAction, CompletionDirection, EntryStateFilter, EntryView, ExpressionId, SelectionDirection,
 };
 
 impl App {
@@ -9,11 +9,13 @@ impl App {
     }
 
     pub fn move_next(&mut self) {
-        self.session.move_selection(SelectionDirection::Next);
+        self.session
+            .dispatch(AppAction::MoveSelection(SelectionDirection::Next));
     }
 
     pub fn move_previous(&mut self) {
-        self.session.move_selection(SelectionDirection::Previous);
+        self.session
+            .dispatch(AppAction::MoveSelection(SelectionDirection::Previous));
     }
 
     pub fn start_insert(&mut self) {
@@ -30,18 +32,18 @@ impl App {
             return;
         };
 
-        self.session.start_edit(id);
+        self.session.dispatch(AppAction::StartEdit(id));
         self.mode = Mode::Edit;
     }
 
     pub fn open_search(&mut self) {
         self.mode = Mode::Search;
-        self.session.open_entry_search();
+        self.session.dispatch(AppAction::OpenEntrySearch);
         self.session.status = "search entries".to_string();
     }
 
     pub fn close_search(&mut self) {
-        self.session.close_entry_search();
+        self.session.dispatch(AppAction::CloseEntrySearch);
         self.mode = Mode::Normal;
     }
 
@@ -52,7 +54,7 @@ impl App {
 
         let mut query = self.session.entry_search_query.clone();
         query.push(ch);
-        self.session.entry_search_changed(query);
+        self.session.dispatch(AppAction::EntrySearchChanged(query));
     }
 
     pub fn backspace_search(&mut self) {
@@ -62,7 +64,7 @@ impl App {
 
         let mut query = self.session.entry_search_query.clone();
         query.pop();
-        self.session.entry_search_changed(query);
+        self.session.dispatch(AppAction::EntrySearchChanged(query));
     }
 
     pub fn cycle_entry_state_filter(&mut self) {
@@ -71,7 +73,8 @@ impl App {
             EntryStateFilter::Values => EntryStateFilter::Errors,
             EntryStateFilter::Errors => EntryStateFilter::All,
         };
-        self.session.entry_state_filter_changed(next);
+        self.session
+            .dispatch(AppAction::EntryStateFilterChanged(next));
     }
 
     pub fn cancel_input(&mut self) {
@@ -147,7 +150,9 @@ impl App {
             return;
         }
 
-        self.session.delete_selected_entry();
+        if let Some(id) = self.selected_id() {
+            self.session.dispatch(AppAction::DeleteEntry(id));
+        }
     }
 
     pub fn insert_selected_reference(&mut self) {
@@ -156,7 +161,7 @@ impl App {
             return;
         };
 
-        self.session.insert_reference(id);
+        self.session.dispatch(AppAction::InsertReference(id));
         self.mode = Mode::Insert;
     }
 
@@ -166,22 +171,22 @@ impl App {
             return;
         };
 
-        self.session.recalculate_entry(id);
+        self.session.dispatch(AppAction::RecalculateEntry(id));
     }
 
     pub fn recalculate_all(&mut self) {
-        self.session.recalculate_all();
+        self.session.dispatch(AppAction::RecalculateAll);
         self.mode = Mode::Normal;
     }
 
     pub fn clear(&mut self) {
-        self.session.clear();
+        self.session.dispatch(AppAction::Clear);
         self.mode = Mode::Normal;
         self.session.status = "cleared".to_string();
     }
 
     pub fn undo(&mut self) {
-        self.session.undo();
+        self.session.dispatch(AppAction::Undo);
         self.mode = Mode::Normal;
         if self.session.status == "Undone" {
             self.session.status = "undone".to_string();
@@ -191,7 +196,7 @@ impl App {
     }
 
     pub fn redo(&mut self) {
-        self.session.redo();
+        self.session.dispatch(AppAction::Redo);
         self.mode = Mode::Normal;
         if self.session.status == "Redone" {
             self.session.status = "redone".to_string();

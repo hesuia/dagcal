@@ -133,16 +133,14 @@ impl Repl {
     }
 
     fn print_entries(&self) {
-        let entries = self.engine.entries();
-
-        if entries.is_empty() {
+        if self.engine.entry_count() == 0 {
             println!("no entries");
             return;
         }
 
-        for entry in entries {
+        for entry in self.engine.iter_entries() {
             print!("{} = {} => ", entry.id, entry.source);
-            print_state_value(&entry.state);
+            print_state_value(entry.state);
         }
     }
 }

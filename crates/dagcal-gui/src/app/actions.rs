@@ -20,29 +20,6 @@ impl GuiApp {
         self.session.close_entry_search().into()
     }
 
-    pub(super) fn entry_search_changed(&mut self, value: String) -> UiEffect {
-        self.session.entry_search_changed(value).into()
-    }
-
-    pub(super) fn entry_state_filter_changed(
-        &mut self,
-        filter: dagcal_app::EntryStateFilter,
-    ) -> UiEffect {
-        self.session.entry_state_filter_changed(filter).into()
-    }
-
-    pub(super) fn clear_entry_search(&mut self) -> UiEffect {
-        self.session.clear_entry_search().into()
-    }
-
-    pub(super) fn input_changed(&mut self, value: String) -> UiEffect {
-        self.session.input_changed(value).into()
-    }
-
-    pub(super) fn submit_input(&mut self) -> UiEffect {
-        self.session.submit_input().into()
-    }
-
     pub(super) fn start_edit(&mut self, id: dagcal_app::ExpressionId) -> UiEffect {
         self.session.start_edit(id).into()
     }
@@ -55,44 +32,12 @@ impl GuiApp {
         self.session.cancel_edit().into()
     }
 
-    pub(super) fn delete_entry(&mut self, id: dagcal_app::ExpressionId) -> UiEffect {
-        self.session.delete_entry(id).into()
-    }
-
     pub(super) fn recalculate_entry(&mut self, id: dagcal_app::ExpressionId) -> UiEffect {
         self.session.recalculate_entry(id).into()
     }
 
     pub(super) fn recalculate_all(&mut self) -> UiEffect {
         self.session.recalculate_all().into()
-    }
-
-    pub(super) fn insert_reference(&mut self, id: dagcal_app::ExpressionId) -> UiEffect {
-        self.session.insert_reference(id).into()
-    }
-
-    pub(super) fn insert_constant(&mut self, name: String) -> UiEffect {
-        self.session.insert_constant(name).into()
-    }
-
-    pub(super) fn insert_function(&mut self, name: String) -> UiEffect {
-        self.session.insert_function(name).into()
-    }
-
-    pub(super) fn select_entry(&mut self, id: dagcal_app::ExpressionId) -> UiEffect {
-        self.session.select_entry(id).into()
-    }
-
-    pub(super) fn set_hovered_entry(&mut self, id: dagcal_app::ExpressionId) -> UiEffect {
-        self.session.set_hovered_entry(id).into()
-    }
-
-    pub(super) fn clear_hovered_entry(&mut self, id: dagcal_app::ExpressionId) -> UiEffect {
-        self.session.clear_hovered_entry(id).into()
-    }
-
-    pub(super) fn select_hovered_entry(&mut self) -> UiEffect {
-        self.session.select_hovered_entry().into()
     }
 
     pub(super) fn clear(&mut self) -> Task<Message> {

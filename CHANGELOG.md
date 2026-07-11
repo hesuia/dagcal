@@ -7,11 +7,18 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- Core: Added allocation-free borrowed entry views and stable-ID ordered entry iterators.
+- App: Added typed `AppAction` and `AppEffect` APIs for frontend-independent state transitions.
 - Added `dist-gui` and `dist-tui` Cargo profiles for optimized distribution builds of the GUI and TUI frontends.
 - GUI: Added shortcuts for new entry, save, save as, load, quit, edit selected entry, and recalculation actions.
 - GUI: Added double-click editing for entry rows.
 
 ### Changed
+- Core: Update dependency edges incrementally when entries change instead of rebuilding the complete graph.
+- Core: Removed the redundant `DependencyIndex` forwarding layer; recomputation now depends directly on the internal `ReferenceGraph`.
+- Core: Isolated undo/redo history from evaluation session state and use ordered entry storage to avoid repeated query sorting.
+- App/GUI/TUI: Route shared application operations through the app reducer and provide allocation-free filtered-entry selectors.
+- GUI: Removed forwarding-only action methods and translate app effects at the Iced adapter boundary.
 - GUI/TUI: Omit the currently edited or drafted entry from completion dropdown suggestions.
 - GUI/TUI: Show current results on named entry and `$n` completion suggestions.
 - GUI release packaging now builds `dagcal-gui` with the dedicated `dist-gui` profile instead of the default `release` profile.
