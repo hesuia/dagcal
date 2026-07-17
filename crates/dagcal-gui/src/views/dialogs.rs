@@ -75,7 +75,11 @@ fn help_text(topic: HelpTopic) -> (&'static str, &'static str) {
         ),
         HelpTopic::About => (
             "About dagcal",
-            "dagcal is a dependency-aware calculator.\n\nExpressions are tracked as stable result IDs such as $1, and dependent entries are recomputed automatically.",
+            concat!(
+                "Version ",
+                env!("CARGO_PKG_VERSION"),
+                "\n\ndagcal is a dependency-aware calculator.\n\nExpressions are tracked as stable result IDs such as $1, and dependent entries are recomputed automatically."
+            ),
         ),
     }
 }

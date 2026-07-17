@@ -6,6 +6,9 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- GUI: Include the application version in the About dialog.
+
 ## [0.5.0] - 2026-07-11
 
 ### Added
