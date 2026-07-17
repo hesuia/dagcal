@@ -8,6 +8,7 @@ The format is based on Keep a Changelog.
 
 ### Changed
 - GUI: Include the application version in the About dialog.
+- Core: Limit undo/redo history to 100 snapshots by default and allow configuring the limit at engine initialization.
 
 ## [0.5.0] - 2026-07-11
 

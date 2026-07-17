@@ -838,6 +838,35 @@ fn public_api_new_mutation_after_undo_clears_redo_history() {
 }
 
 #[test]
+fn public_api_history_limit_applies_to_combined_undo_redo_history() {
+    let mut engine = Engine::with_history_limit(2);
+
+    engine.execute("1");
+    engine.execute("2");
+    engine.execute("3");
+
+    assert!(engine.undo());
+    assert!(engine.undo());
+    assert!(!engine.undo());
+    assert_eq!(engine.entry_ids(), vec![id(1)]);
+
+    assert!(engine.redo());
+    assert!(engine.redo());
+    assert!(!engine.redo());
+}
+
+#[test]
+fn public_api_zero_history_limit_disables_undo_and_redo() {
+    let mut engine = Engine::with_history_limit(0);
+
+    engine.execute("1");
+    assert!(!engine.can_undo());
+    assert!(!engine.can_redo());
+    assert!(!engine.undo());
+    assert!(!engine.redo());
+}
+
+#[test]
 fn public_api_clear_is_undoable() {
     let mut engine = Engine::new();
     engine.execute("1");

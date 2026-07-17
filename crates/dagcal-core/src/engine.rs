@@ -229,7 +229,7 @@ fn completion_result_summary(state: &EntryState) -> String {
 /// ```
 pub struct Engine {
     session: Session,
-    history: History,
+    history: History<EngineSnapshot>,
 }
 
 impl Default for Engine {
@@ -245,9 +245,18 @@ impl Engine {
     /// The first plain expression or named definition saved into this engine
     /// receives ID `$1`.
     pub fn new() -> Self {
+        Self::with_history_limit(100)
+    }
+
+    /// Creates an empty engine with a custom maximum number of undo/redo
+    /// snapshots.
+    ///
+    /// The limit applies to the combined undo and redo history. A limit of
+    /// zero disables undo and redo history.
+    pub fn with_history_limit(limit: usize) -> Self {
         Self {
             session: Session::new(),
-            history: History::default(),
+            history: History::new(limit),
         }
     }
 
@@ -358,8 +367,7 @@ impl Engine {
     /// dependencies, and recomputed entry states. Runtime constants and
     /// functions are not snapshotted and remain configured on this engine.
     pub fn undo(&mut self) -> bool {
-        let current = self.snapshot();
-        let Some(previous) = self.history.take_undo(current) else {
+        let Some(previous) = self.history.take_undo() else {
             return false;
         };
         self.restore_snapshot_untracked(previous)
@@ -369,8 +377,7 @@ impl Engine {
 
     /// Reapplies the most recently undone entry mutation.
     pub fn redo(&mut self) -> bool {
-        let current = self.snapshot();
-        let Some(next) = self.history.take_redo(current) else {
+        let Some(next) = self.history.take_redo() else {
             return false;
         };
         self.restore_snapshot_untracked(next)
@@ -923,11 +930,12 @@ impl Engine {
     }
 
     fn record_undo(&mut self, previous: EngineSnapshot) {
-        if self.snapshot() == previous {
+        let current = self.snapshot();
+        if current == previous {
             return;
         }
 
-        self.history.record(previous);
+        self.history.record(previous, current);
     }
 }
 
